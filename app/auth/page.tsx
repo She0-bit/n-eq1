@@ -3,9 +3,14 @@
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
-import { CheckCircle, XCircle, Loader2, ArrowRight, Trophy, Users, Sparkles } from 'lucide-react'
+import { Loader2, ArrowRight, Eye, EyeOff, Check, MailCheck, MailWarning, RotateCw } from 'lucide-react'
 
 type Mode = 'login' | 'signup' | 'forgot'
+
+
+const USERNAME_MIN = 3
+const USERNAME_MAX = 20
+const USERNAME_REGEX = /^[a-z0-9_]{3,20}$/
 
 export default function AuthPage() {
   return (
@@ -16,272 +21,437 @@ export default function AuthPage() {
 }
 
 function AuthForm() {
-  const [mode, setMode]               = useState<Mode>('login')
-  const [name, setName]               = useState('')
-  const [username, setUsername]       = useState('')
-  const [email, setEmail]             = useState('')
-  const [password, setPassword]       = useState('')
-  const [institution, setInstitution] = useState('')
-  const [error, setError]             = useState('')
-  const [loading, setLoading]         = useState(false)
-  const [successMsg, setSuccessMsg]   = useState('')
+  const [mode, setMode] = useState<Mode>('login')
+
+  const [loginEmail, setLoginEmail] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+
+  const [signupName, setSignupName] = useState('')
+  const [signupUsername, setSignupUsername] = useState('')
+  const [signupEmail, setSignupEmail] = useState('')
+  const [signupPassword, setSignupPassword] = useState('')
+  const [signupConfirmPassword, setSignupConfirmPassword] = useState('')
+
+  const [forgotEmail, setForgotEmail] = useState('')
+
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [successMsg, setSuccessMsg] = useState('')
+
+  
+  const [needsConfirm, setNeedsConfirm] = useState(false)      
+  const [pendingEmail, setPendingEmail] = useState('')          
+  const [resendCooldown, setResendCooldown] = useState(0)
+  const [resendMsg, setResendMsg] = useState('')
+  const [resending, setResending] = useState(false)
 
   const [usernameStatus, setUsernameStatus] = useState<'idle'|'checking'|'available'|'taken'|'invalid'>('idle')
   const usernameTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const router       = useRouter()
+  const router = useRouter()
   const searchParams = useSearchParams()
-  const supabase     = createClient()
+  const supabase = createClient()
+
+  // password validation checks
+  const validations = {
+    minLength: signupPassword.length >= 6,
+    hasUpper: /[A-Z]/.test(signupPassword),
+    hasNumber: /[0-9]/.test(signupPassword),
+    hasSymbol: /[!@#$%^&*(),.?":{}|<>]/.test(signupPassword),
+  }
+  const isPasswordValid = Object.values(validations).every(Boolean)
+
+  // username validation checks
+  const usernameChecks = {
+    length: signupUsername.length >= USERNAME_MIN && signupUsername.length <= USERNAME_MAX,
+    startsWithLetter: /^[a-z]/.test(signupUsername),
+  }
+  const isUsernameValid = USERNAME_REGEX.test(signupUsername) && usernameChecks.startsWithLetter
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return
+    const t = setTimeout(() => setResendCooldown(c => c - 1), 1000)
+    return () => clearTimeout(t)
+  }, [resendCooldown])
+
+  async function resendConfirmation() {
+    const email = pendingEmail.trim()
+    if (!email || resendCooldown > 0) return
+    setResending(true); setResendMsg('')
+    const { error: resendErr } = await supabase.auth.resend({
+      type: 'signup',
+      email,
+      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+    })
+    setResending(false)
+    if (resendErr) {
+      setResendMsg(
+        resendErr.message.toLowerCase().includes('rate limit') || resendErr.status === 429
+          ? 'Too many emails sent. Please wait a few minutes and try again.'
+          : resendErr.message
+      )
+      setResendCooldown(30)
+      return
+    }
+    setResendMsg('Confirmation email sent! Check your inbox and spam folder.')
+    setResendCooldown(60)
+  }
 
   useEffect(() => {
     if (searchParams.get('error') === 'link_expired') {
       setError('That link has expired. Request a new one below.')
       setMode('forgot')
     }
-  }, [])
+  }, [searchParams])
 
   useEffect(() => {
-    if (!username || mode !== 'signup') { setUsernameStatus('idle'); return }
-    const valid = /^[a-z0-9_]{3,20}$/.test(username)
-    if (!valid) { setUsernameStatus('invalid'); return }
-    setUsernameStatus('checking')
     if (usernameTimer.current) clearTimeout(usernameTimer.current)
+
+    if (!signupUsername || mode !== 'signup') { setUsernameStatus('idle'); return }
+    if (!isUsernameValid) { setUsernameStatus('invalid'); return }
+
+    setUsernameStatus('checking')
+
     usernameTimer.current = setTimeout(async () => {
-      const { data } = await supabase.from('profiles').select('id').ilike('username', username).maybeSingle()
-      setUsernameStatus(data ? 'taken' : 'available')
+      try {
+        const { data } = await supabase.from('profiles').select('id').eq('username', signupUsername.toLowerCase()).maybeSingle()
+        setUsernameStatus(data ? 'taken' : 'available')
+      } catch (err) {
+        console.error("Network error during username check")
+        setUsernameStatus('idle')
+      }
     }, 500)
-  }, [username, mode])
+
+    return () => { if (usernameTimer.current) clearTimeout(usernameTimer.current) }
+  }, [signupUsername, mode, isUsernameValid, supabase])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(''); setSuccessMsg(''); setLoading(true)
 
-    if (mode === 'forgot') {
-      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/auth/callback?next=/auth/update-password`,
-      })
-      if (resetErr) setError(resetErr.message)
-      else setSuccessMsg('Check your email — we sent a password reset link.')
-      setLoading(false); return
+    const handleSupabaseError = (err: any) => {
+      if (err.message === 'Failed to fetch' || err.message.includes('NetworkError')) {
+        return 'Connection error. Please check your internet and try again.'
+      }
+      return err.message
     }
 
     if (mode === 'signup') {
-      if (usernameStatus !== 'available') {
-        setError('Please choose a valid, available username.')
+      if (!isUsernameValid) {
+        setError(`Username must be ${USERNAME_MIN}–${USERNAME_MAX} characters, start with a letter, and use only a-z, 0-9 or _.`)
         setLoading(false); return
       }
-      const { data, error: signUpError } = await supabase.auth.signUp({
-        email, password,
-        options: { data: { name, username: username.toLowerCase() } },
-      })
-      if (signUpError) { setError(signUpError.message); setLoading(false); return }
-      if (data.user) {
-        await supabase.from('profiles').update({ institution, name, username: username.toLowerCase() }).eq('id', data.user.id)
+      if (usernameStatus === 'checking') { setError('Still checking username, try again in a second.'); setLoading(false); return }
+      if (usernameStatus === 'taken') { setError('Username already in use.'); setLoading(false); return }
+      if (!isPasswordValid) { setError('Please meet all password requirements.'); setLoading(false); return }
+      if (signupPassword !== signupConfirmPassword) {
+        setError('Passwords do not match.');
+        setLoading(false); return
       }
-      setSuccessMsg('Account created! Check your email to confirm, then sign in.')
-      setMode('login')
-    } else {
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
-      if (signInError) { setError(signInError.message); setLoading(false); return }
-      window.location.href = '/'
+
+     
+      const { error: signUpError } = await supabase.auth.signUp({
+        email: signupEmail.trim(),
+        password: signupPassword,
+        options: {
+          data: { name: signupName.trim().slice(0, 60), username: signupUsername.toLowerCase() },
+          
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      })
+
+      if (signUpError) {
+      
+        setError(
+          signUpError.message.includes('Database error')
+            ? 'That username was just taken. Please choose another one.'
+            : handleSupabaseError(signUpError)
+        )
+        setLoading(false)
+        return
+      }
+
+      
+
+      setPendingEmail(signupEmail.trim())
+      setSuccessMsg('Account created! Please check your email.')
+    }
+    else if (mode === 'login') {
+      setNeedsConfirm(false); setResendMsg('')
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: loginEmail.trim(),
+        password: loginPassword
+      })
+
+      if (signInError) {
+        const notConfirmed =
+          (signInError as any).code === 'email_not_confirmed' ||
+          signInError.message.toLowerCase().includes('email not confirmed')
+        if (notConfirmed) {
+          setPendingEmail(loginEmail.trim())
+          setNeedsConfirm(true)
+        } else if (signInError.message.toLowerCase().includes('banned')) {
+          setError('Your account has been suspended.')
+        } else {
+          setError('Invalid email or password.')
+        }
+      } else {
+        window.location.href = '/'
+      }
+    }
+    else {
+      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(forgotEmail.trim(), {
+        
+        redirectTo: `${window.location.origin}/auth/update-password`,
+      })
+      if (resetErr) setError(handleSupabaseError(resetErr))
+      else setSuccessMsg('Check your email for reset link.')
     }
     setLoading(false)
   }
 
   function switchMode(m: Mode) {
-    setMode(m); setError(''); setSuccessMsg(''); setUsernameStatus('idle')
+    setMode(m); setError(''); setSuccessMsg(''); setShowPassword(false); setSignupPassword('')
+    setNeedsConfirm(false); setResendMsg('')
   }
 
-  const inputCls = (status?: 'ok' | 'err') =>
-    `field ${status === 'err' ? 'error' : status === 'ok' ? 'success' : ''}`
+  const usernameBorder =
+    usernameStatus === 'taken' || usernameStatus === 'invalid'
+      ? 'border-red-500/50'
+      : usernameStatus === 'available'
+        ? 'border-emerald-500/40'
+        : 'border-white/5'
 
   return (
-    <div className="min-h-[calc(100vh-64px)] flex">
+    <div className="min-h-[calc(100vh-64px)] flex items-center justify-center bg-[#fcfcfc] px-6 relative overflow-hidden">
+      <div className="w-full max-w-[400px] bg-[#1e1a1d]/95 border border-white/20 backdrop-blur-[40px] rounded-[2.5rem] p-8 sm:p-12 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] relative z-10 overflow-hidden">
 
-      {/* ── Left panel — brand (desktop only) ────────────────────── */}
-      <div className="hidden lg:flex flex-col justify-between w-[420px] shrink-0 bg-gradient-to-br from-charcoal to-charcoal-deep p-10 relative overflow-hidden">
-        {/* dot grid */}
-        <div className="absolute inset-0 opacity-[0.05]"
-          style={{ backgroundImage: 'radial-gradient(circle, #fff 1px, transparent 1px)', backgroundSize: '22px 22px' }} />
-
-        <div className="relative z-10">
-          {/* Logo */}
-          <div className="flex items-center gap-2.5 mb-12">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo-light.png" alt="n=1" className="h-8 w-auto" style={{ filter: 'brightness(0) invert(1)' }} />
-            <span className="text-white text-2xl leading-none" style={{ fontFamily: 'var(--font-chunky)' }}>n=1</span>
-          </div>
-
-          <h2 className="text-3xl font-bold text-white leading-tight mb-3">
-            Science runs on participation.
-          </h2>
-          <p className="text-white/50 text-sm leading-relaxed mb-10">
-            Fill surveys from other researchers. Earn points. Your rank determines how many responses your own research collects.
-          </p>
-
-          {/* Feature list */}
-          {[
-            { icon: Trophy,   text: 'Earn points for every survey you complete' },
-            { icon: Sparkles, text: 'Higher rank = more eyes on your research' },
-            { icon: Users,    text: 'Follow researchers in your field' },
-          ].map(({ icon: Icon, text }) => (
-            <div key={text} className="flex items-start gap-3 mb-5">
-              <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center shrink-0 mt-0.5">
-                <Icon size={15} className="text-white/70" />
-              </div>
-              <p className="text-white/60 text-sm leading-snug">{text}</p>
+        {successMsg && mode === 'signup' ? (
+          <div className="flex flex-col items-center text-center space-y-6 py-4 relative z-10">
+            <div className="w-20 h-20 bg-emerald-500/20 rounded-full flex items-center justify-center border border-emerald-500/30 animate-pulse">
+              <MailCheck className="text-emerald-400" size={40} />
             </div>
-          ))}
-        </div>
-
-        {/* Bottom tag */}
-        <div className="relative z-10">
-          <p className="text-white/20 text-xs">n-eq1.com · Research participation exchange</p>
-        </div>
-      </div>
-
-      {/* ── Right panel — form ────────────────────────────────────── */}
-      <div className="flex-1 flex items-center justify-center px-4 py-12 bg-surface">
-        <div className="w-full max-w-sm animate-fade-slide-up">
-
-          {/* Mobile logo */}
-          <div className="flex lg:hidden items-center gap-2 mb-8">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo-dark.png" alt="n=1" className="h-7 w-auto" />
-            <span className="text-charcoal text-xl" style={{ fontFamily: 'var(--font-chunky)' }}>n=1</span>
-          </div>
-
-          {/* Heading */}
-          <div className="mb-7">
-            <h1 className="text-2xl font-bold text-slate-800 tracking-tight">
-              {mode === 'login'  ? 'Welcome back' :
-               mode === 'signup' ? 'Create your account' :
-               'Reset password'}
-            </h1>
-            <p className="text-slate-500 text-sm mt-1">
-              {mode === 'login'  ? 'Sign in to fill surveys and earn points' :
-               mode === 'signup' ? 'Join the research participation network' :
-               'Enter your email and we\'ll send a reset link'}
-            </p>
-          </div>
-
-          {/* Alerts */}
-          {error && (
-            <div className="mb-5 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-4 py-3 flex items-start gap-2">
-              <XCircle size={15} className="shrink-0 mt-0.5 text-red-400" />
-              {error}
+            <div className="space-y-2">
+              <h2 className="text-2xl font-bold text-white">Check your mail</h2>
+              <p className="text-white/60 text-sm leading-relaxed">{successMsg}</p>
+              {pendingEmail && <p className="text-white/30 text-xs font-medium">Sent to {pendingEmail}</p>}
             </div>
-          )}
-          {successMsg && (
-            <div className="mb-5 text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 flex items-start gap-2">
-              <CheckCircle size={15} className="shrink-0 mt-0.5 text-emerald-400" />
-              {successMsg}
-            </div>
-          )}
+            <ResendBlock
+              onResend={resendConfirmation}
+              cooldown={resendCooldown}
+              loading={resending}
+              message={resendMsg}
+            />
+            <button
+              onClick={() => switchMode('login')}
+              className="w-full bg-white text-[#1e1a1d] py-4 rounded-xl text-xs font-bold hover:bg-white/95 transition-all flex items-center justify-center gap-2 shadow-xl"
+            >
+              Back to Sign In <ArrowRight size={14} />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="absolute inset-0 bg-gradient-to-br from-white/[0.08] via-transparent to-transparent pointer-events-none" />
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {mode === 'signup' && (
-              <>
-                <div>
-                  <label className="field-label">Full name</label>
-                  <input type="text" required value={name} onChange={e => setName(e.target.value)}
-                    placeholder="Dr. Jane Smith" className="field" />
-                </div>
+            <div className="flex flex-col items-center mb-8 text-center relative z-10">
+              <span className="text-white text-4xl font-bold mb-4" style={{ fontFamily: 'var(--font-chunky)' }}>n=1</span>
+              <h1 className="text-xl font-bold text-white tracking-tight">
+                {mode === 'login' ? 'Welcome back' : mode === 'signup' ? 'Create account' : 'Reset password'}
+              </h1>
+              <p className="text-white/40 text-xs mt-2 font-medium tracking-wide">
+                {mode === 'login' ? 'Continue your journey.' : mode === 'signup' ? 'Join the research community.' : 'Enter your email to reset.'}
+              </p>
 
-                <div>
-                  <label className="field-label">
-                    Username
-                    <span className="text-slate-400 font-normal ml-1">— your @handle</span>
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium select-none">@</span>
-                    <input
-                      type="text" required
-                      value={username}
-                      onChange={e => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
-                      placeholder="dr_jane"
-                      maxLength={20}
-                      className={`field pl-8 ${
-                        usernameStatus === 'available' ? 'success' :
-                        usernameStatus === 'taken' || usernameStatus === 'invalid' ? 'error' : ''
-                      }`}
-                    />
-                    <div className="absolute right-3.5 top-1/2 -translate-y-1/2">
-                      {usernameStatus === 'checking'  && <Loader2 size={15} className="animate-spin text-slate-400" />}
-                      {usernameStatus === 'available' && <CheckCircle size={15} className="text-emerald-500" />}
-                      {(usernameStatus === 'taken' || usernameStatus === 'invalid') && <XCircle size={15} className="text-red-400" />}
+              {error && <p className="text-red-400 text-[10px] mt-4 font-bold bg-red-400/10 py-2 px-4 rounded-full border border-red-400/20">{error}</p>}
+              {needsConfirm && mode === 'login' && (
+                <div className="w-full mt-4 rounded-2xl bg-amber-400/10 border border-amber-400/20 p-4 space-y-3 text-left">
+                  <div className="flex items-start gap-2.5">
+                    <MailWarning size={16} className="text-amber-300 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-xs font-bold text-amber-200">Please confirm your email first</p>
+                      <p className="text-[11px] text-white/50 mt-0.5 leading-relaxed">
+                        We sent a confirmation link to <span className="text-white/80 font-semibold">{pendingEmail}</span>. Check your inbox and spam folder.
+                      </p>
                     </div>
                   </div>
-                  <p className="text-xs mt-1.5 text-slate-400 tabular-nums">
-                    {usernameStatus === 'available' && <span className="text-emerald-600 font-medium">@{username} is available!</span>}
-                    {usernameStatus === 'taken'     && <span className="text-red-500">@{username} is already taken</span>}
-                    {usernameStatus === 'invalid'   && <span className="text-red-500">3–20 chars, letters, numbers and _ only</span>}
-                    {usernameStatus === 'idle'      && 'Your public profile: n-eq1.com/u/username'}
-                    {usernameStatus === 'checking'  && 'Checking…'}
-                  </p>
+                  <ResendBlock
+                    onResend={resendConfirmation}
+                    cooldown={resendCooldown}
+                    loading={resending}
+                    message={resendMsg}
+                    compact
+                  />
                 </div>
-
-                <div>
-                  <label className="field-label">
-                    Institution <span className="text-slate-400 font-normal">(optional)</span>
-                  </label>
-                  <input type="text" value={institution} onChange={e => setInstitution(e.target.value)}
-                    placeholder="e.g. King Saud University" className="field" />
-                </div>
-              </>
-            )}
-
-            <div>
-              <label className="field-label">Email</label>
-              <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
-                placeholder="you@university.edu" className="field" />
+              )}
+              {successMsg && mode !== 'signup' && <p className="text-emerald-400 text-[10px] mt-4 font-bold bg-emerald-400/10 py-2 px-4 rounded-full border border-emerald-400/20">{successMsg}</p>}
             </div>
 
-            {mode !== 'forgot' && (
-              <div>
-                <label className="field-label">Password</label>
-                <input type="password" required minLength={6} value={password}
-                  onChange={e => setPassword(e.target.value)} placeholder="At least 6 characters"
-                  className="field" />
-                {mode === 'login' && (
-                  <button type="button" onClick={() => switchMode('forgot')}
-                    className="mt-1.5 text-xs text-slate-500 hover:text-charcoal transition-colors">
-                    Forgot password?
-                  </button>
-                )}
-              </div>
-            )}
+            <form onSubmit={handleSubmit} className="space-y-4 relative z-10">
+              {mode === 'signup' && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">Full Name</label>
+                      <input type="text" required maxLength={60} value={signupName} onChange={e => setSignupName(e.target.value)}
+                        placeholder="Jana" className="w-full bg-white/[0.05] border border-white/5 rounded-xl px-4 py-3 text-white placeholder:text-white/10 outline-none focus:border-emerald-500/40 transition-all text-xs" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">Username</label>
+                      <div className="relative">
+                        <input type="text" required value={signupUsername}
+                          maxLength={USERNAME_MAX}
+                          autoComplete="username"
+                          autoCapitalize="none"
+                          spellCheck={false}
+                          onChange={e => setSignupUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+                          placeholder="jana_x" className={`w-full bg-white/[0.05] border rounded-xl px-4 py-3 pr-8 text-white placeholder:text-white/10 outline-none transition-all text-xs ${usernameBorder}`} />
+                        {usernameStatus === 'checking' && <Loader2 size={10} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-white/20" />}
+                        {usernameStatus === 'available' && <Check size={10} strokeWidth={4} className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-400" />}
+                      </div>
+                    </div>
+                  </div>
 
-            <button
-              type="submit"
-              disabled={loading || (mode === 'signup' && usernameStatus !== 'available')}
-              className="w-full flex items-center justify-center gap-2 bg-charcoal text-white py-3 rounded-xl text-sm font-semibold hover:bg-charcoal-deep active:scale-[0.98] transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed mt-2 shadow-sm"
-            >
-              {loading ? (
-                <><Loader2 size={15} className="animate-spin" /> Please wait…</>
-              ) : mode === 'login'  ? <><ArrowRight size={15} /> Sign in</> :
-                mode === 'signup' ? <><ArrowRight size={15} /> Create account</> :
-                'Send reset link'}
-            </button>
-          </form>
+                  {signupUsername.length > 0 && (
+                    <div className="grid grid-cols-2 gap-x-2 gap-y-1 -mt-1 px-1">
+                      <ValidationItem label={`${USERNAME_MIN}–${USERNAME_MAX} characters`} isValid={usernameChecks.length} />
+                      <ValidationItem label="Starts with a letter" isValid={usernameChecks.startsWithLetter} />
+                      <ValidationItem label="a-z, 0-9, _ only" isValid={true} />
+                      <ValidationItem
+                        label={usernameStatus === 'taken' ? 'Username taken' : usernameStatus === 'checking' ? 'Checking…' : 'Available'}
+                        isValid={usernameStatus === 'available'}
+                        isError={usernameStatus === 'taken'}
+                      />
+                    </div>
+                  )}
 
-          <p className="mt-6 text-center text-sm text-slate-500">
-            {mode === 'forgot' ? (
-              <button onClick={() => switchMode('login')} className="text-charcoal font-medium hover:underline">
-                ← Back to sign in
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">Email</label>
+                    <input type="email" required value={signupEmail} onChange={e => setSignupEmail(e.target.value)}
+                      placeholder="you@gmail.com" className="w-full bg-white/[0.05] border border-white/5 rounded-xl px-4 py-3 text-white placeholder:text-white/10 outline-none focus:border-emerald-500/40 transition-all text-xs" />
+                  </div>
+                  <div className="space-y-1 relative">
+                    <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">Password</label>
+                    <div className="relative">
+                      <input type={showPassword ? "text" : "password"} required value={signupPassword} onChange={e => setSignupPassword(e.target.value)}
+                        placeholder="••••••••" className="w-full bg-white/[0.05] border border-white/5 rounded-xl px-4 py-3 text-white placeholder:text-white/10 outline-none focus:border-emerald-500/40 transition-all text-xs pr-10" />
+                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/50 transition-colors">
+                        {showPassword ? <Eye size={14} /> : <EyeOff size={14} />}
+                      </button>
+                    </div>
+
+                    {signupPassword.length > 0 && (
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-1 mt-3 px-1">
+                        <ValidationItem label="6+ characters" isValid={validations.minLength} />
+                        <ValidationItem label="One uppercase" isValid={validations.hasUpper} />
+                        <ValidationItem label="One number" isValid={validations.hasNumber} />
+                        <ValidationItem label="One symbol" isValid={validations.hasSymbol} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">Confirm Password</label>
+                    <input type={showPassword ? "text" : "password"} required value={signupConfirmPassword} onChange={e => setSignupConfirmPassword(e.target.value)}
+                      placeholder="••••••••" className={`w-full bg-white/[0.05] border rounded-xl px-4 py-3 text-white placeholder:text-white/10 outline-none transition-all text-xs ${signupConfirmPassword && signupPassword !== signupConfirmPassword ? 'border-red-500/40' : 'border-white/5'}`} />
+                  </div>
+                </>
+              )}
+
+              {mode === 'login' && (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">Email</label>
+                    <input type="email" required value={loginEmail} onChange={e => setLoginEmail(e.target.value)}
+                      placeholder="you@gmail.com" className="w-full bg-white/[0.05] border border-white/5 rounded-xl px-4 py-3 text-white placeholder:text-white/10 outline-none focus:border-emerald-500/40 transition-all text-xs" />
+                  </div>
+                  <div className="space-y-1 relative">
+                    <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">Password</label>
+                    <div className="relative">
+                      <input type={showPassword ? "text" : "password"} required value={loginPassword} onChange={e => setLoginPassword(e.target.value)}
+                        placeholder="••••••••" className="w-full bg-white/[0.05] border border-white/5 rounded-xl px-4 py-3 text-white placeholder:text-white/10 outline-none focus:border-emerald-500/40 transition-all text-xs pr-10" />
+                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/50 transition-colors">
+                        {showPassword ? <Eye size={14} /> : <EyeOff size={14} />}
+                      </button>
+                    </div>
+                    <div className="flex justify-end pr-1 mt-1">
+                      <button type="button" onClick={() => switchMode('forgot')} className="text-emerald-400 font-bold text-[10px] hover:text-emerald-300 transition-colors">Forgot password?</button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {mode === 'forgot' && (
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">Email</label>
+                  <input type="email" required value={forgotEmail} onChange={e => setForgotEmail(e.target.value)}
+                    placeholder="you@gmail.com" className="w-full bg-white/[0.05] border border-white/5 rounded-xl px-4 py-3 text-white placeholder:text-white/10 outline-none focus:border-emerald-500/40 transition-all text-xs" />
+                </div>
+              )}
+
+              <button type="submit" disabled={loading || (mode === 'signup' && (usernameStatus === 'invalid' || usernameStatus === 'taken'))}
+                className="w-full bg-white text-[#1e1a1d] py-4 rounded-xl text-xs font-bold hover:bg-white/95 active:scale-[0.98] transition-all flex items-center justify-center gap-2 mt-4 shadow-xl disabled:opacity-30">
+                {loading ? <Loader2 size={16} className="animate-spin" /> : <>{mode === 'login' ? 'Sign In' : mode === 'signup' ? 'Create Account' : 'Send Reset Link'} <ArrowRight size={14} /></>}
               </button>
-            ) : mode === 'login' ? (
-              <>Don't have an account?{' '}
-                <button onClick={() => switchMode('signup')} className="text-charcoal font-semibold hover:underline">Sign up free</button>
-              </>
-            ) : (
-              <>Already have an account?{' '}
-                <button onClick={() => switchMode('login')} className="text-charcoal font-semibold hover:underline">Sign in</button>
-              </>
-            )}
-          </p>
-        </div>
+            </form>
+
+            <p className="mt-10 text-center text-[11px] text-white/20 font-light relative z-10">
+              {mode === 'login' ? (
+                <>New here? <button onClick={() => switchMode('signup')} className="text-emerald-400 font-bold ml-1">Join Now!</button></>
+              ) : (
+                <>Already have an account? <button onClick={() => switchMode('login')} className="text-emerald-400 font-bold ml-1">Sign In</button></>
+              )}
+            </p>
+          </>
+        )}
       </div>
+    </div>
+  )
+}
+
+function ValidationItem({ label, isValid, isError = false }: { label: string; isValid: boolean; isError?: boolean }) {
+  const color = isError ? 'text-red-400' : isValid ? 'text-emerald-400' : 'text-white/20'
+  const dot = isError
+    ? 'bg-red-500/20 border-red-500'
+    : isValid
+      ? 'bg-emerald-500/20 border-emerald-500'
+      : 'border-white/10'
+  return (
+    <div className={`flex items-center gap-1.5 transition-colors duration-300 ${color}`}>
+      <div className={`w-3 h-3 rounded-full flex items-center justify-center border ${dot}`}>
+        {isValid && !isError && <Check size={8} strokeWidth={4} />}
+      </div>
+      <span className="text-[8px] font-bold tracking-tight uppercase">{label}</span>
+    </div>
+  )
+}
+function ResendBlock({ onResend, cooldown, loading, message, compact = false }: {
+  onResend: () => void
+  cooldown: number
+  loading: boolean
+  message: string
+  compact?: boolean
+}) {
+  const ok = message.startsWith('Confirmation email sent')
+  return (
+    <div className={`w-full space-y-2 ${compact ? '' : 'pt-1'}`}>
+      <button
+        type="button"
+        onClick={onResend}
+        disabled={loading || cooldown > 0}
+        className={`w-full flex items-center justify-center gap-2 rounded-xl text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+          compact
+            ? 'py-2.5 bg-white/10 text-white hover:bg-white/15'
+            : 'py-3.5 bg-white/5 border border-white/10 text-white/80 hover:text-white hover:bg-white/10'
+        }`}
+      >
+        {loading
+          ? <Loader2 size={13} className="animate-spin" />
+          : <RotateCw size={13} />}
+        {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend confirmation email'}
+      </button>
+      {message && (
+        <p className={`text-[11px] font-bold text-center ${ok ? 'text-emerald-400' : 'text-red-400'}`}>{message}</p>
+      )}
     </div>
   )
 }
