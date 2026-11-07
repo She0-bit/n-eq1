@@ -1,10 +1,10 @@
 import { createClient } from '@/lib/supabase-server'
 import { notFound, redirect } from 'next/navigation'
 import AdminControls from './AdminControls'
+import { Shield } from 'lucide-react'
 
 export const revalidate = 0
-
-const ADMIN_USERNAME = 'sheikah'
+export const dynamic = 'force-dynamic'
 
 export default async function AdminPage() {
   const supabase = await createClient()
@@ -12,77 +12,75 @@ export default async function AdminPage() {
 
   if (!user) redirect('/auth')
 
-  const { data: profile } = await supabase
+ 
+  const { data: me } = await supabase
     .from('profiles')
-    .select('username')
+    .select('is_admin')
     .eq('id', user.id)
-    .single()
+    .maybeSingle()
 
-  if (profile?.username?.toLowerCase() !== ADMIN_USERNAME) notFound()
+  if (!me?.is_admin) notFound()
 
-  // Parallel fetches
+  
+  await supabase.rpc('admin_release_expired_bans')
+
   const [
+    { data: reportGroups },
     { data: users },
-    { data: reports },
     { data: forms },
   ] = await Promise.all([
+    supabase.rpc('admin_get_reports', { include_resolved: true }),
     supabase
       .from('profiles')
-      .select('id, name, username, institution, specialty, points, is_blocked')
-      .order('points', { ascending: false }),
-    supabase
-      .from('reports')
-      .select('id, form_id, reason, note, created_at')
-      .order('created_at', { ascending: false })
-      .limit(50),
+      .select('id, name, username, institution, specialty, points, strikes, banned_until, ban_reason, is_admin')
+      .not('username', 'is', null)
+      .order('name', { ascending: true }),
     supabase
       .from('forms')
-      .select('id, title, user_id, is_active, fill_count, created_at')
+      .select('id, title, user_id, is_active, moderation_status, fill_count, created_at')
       .order('created_at', { ascending: false })
-      .limit(100),
+      .limit(200),
   ])
 
+  const openReports = (reportGroups ?? []).reduce((n: number, g: any) => n + Number(g.open_count ?? 0), 0)
+
   return (
-    <div className="max-w-4xl mx-auto px-4 py-10 space-y-10">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800">Admin Panel</h1>
-        <p className="text-slate-500 text-sm mt-1">Only visible to you.</p>
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-12 space-y-8 bg-white text-slate-900 min-h-screen animate-fade-in">
+
+      {/**/}
+      <div className="relative rounded-[2.5rem] overflow-hidden bg-gradient-to-b from-[#1e1a1d] to-[#2b2427] border border-white/10 px-6 py-10 sm:px-10 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.35)] text-white">
+        <div className="absolute inset-0 opacity-[0.03] pointer-events-none"
+          style={{ backgroundImage: 'radial-gradient(circle, #fff 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
+        <div className="relative z-10">
+          <div className="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 px-3 py-1.5 rounded-xl mb-4">
+            <Shield size={12} /> Admin
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight mb-2">Moderation Panel</h1>
+          <p className="text-white/40 text-xs sm:text-sm font-medium">Review reports, warn researchers, and manage accounts.</p>
+
+          <div className="grid grid-cols-3 gap-2.5 mt-8">
+            <HeroStat value={openReports} label="open reports" highlight={openReports > 0} />
+            <HeroStat value={users?.length ?? 0} label="users" />
+            <HeroStat value={forms?.length ?? 0} label="surveys" />
+          </div>
+        </div>
       </div>
 
-      {/* Reports */}
-      <section>
-        <h2 className="font-semibold text-slate-800 mb-4">
-          Recent reports ({reports?.length ?? 0})
-        </h2>
-        {!reports || reports.length === 0 ? (
-          <div className="bg-white border border-ivory-border rounded-xl p-6 text-slate-400 text-sm text-center">
-            No reports yet.
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {reports.map((r: any) => (
-              <div key={r.id} className="bg-white border border-ivory-border rounded-xl px-5 py-3.5 flex items-center gap-4">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-slate-800">{r.reason}</p>
-                  {r.note && <p className="text-xs text-slate-500 mt-0.5 truncate">"{r.note}"</p>}
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Survey: <a href={`/forms/${r.form_id}`} className="text-charcoal hover:underline">{r.form_id}</a>
-                    {' · '}{new Date(r.created_at).toLocaleDateString()}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+      <AdminControls
+        reportGroups={(reportGroups as any[]) ?? []}
+        users={(users as any[]) ?? []}
+        forms={(forms as any[]) ?? []}
+        myId={user.id}
+      />
+    </div>
+  )
+}
 
-      {/* Users */}
-      <section>
-        <h2 className="font-semibold text-slate-800 mb-4">
-          All users ({users?.length ?? 0})
-        </h2>
-        <AdminControls users={users ?? []} forms={forms ?? []} />
-      </section>
+function HeroStat({ value, label, highlight = false }: { value: number; label: string; highlight?: boolean }) {
+  return (
+    <div className={`rounded-2xl p-4 text-center border ${highlight ? 'bg-rose-500/10 border-rose-500/25' : 'bg-white/[0.04] border-white/5'}`}>
+      <p className={`text-2xl font-black tabular-nums leading-none ${highlight ? 'text-rose-400' : 'text-white'}`}>{value}</p>
+      <p className={`text-[10px] font-bold uppercase tracking-wider mt-1.5 ${highlight ? 'text-rose-400/70' : 'text-white/30'}`}>{label}</p>
     </div>
   )
 }
