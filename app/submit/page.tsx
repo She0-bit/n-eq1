@@ -3,14 +3,25 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
-import { SPECIALTY_GROUPS, ROLE_GROUPS } from '@/lib/types'
-import { Link2, Clock, BookOpen, ChevronRight, Users } from 'lucide-react'
+import { SPECIALTY_GROUPS, ROLE_GROUPS, COUNTRIES } from '@/lib/types'
+import { Link2, Clock, BookOpen, ChevronLeft, Users, Sparkles, AlertCircle, School, Globe, ChevronRight } from 'lucide-react'
+import Link from 'next/link'
+import { basePoints, EARLY_BIRD_BONUS, MATCH_BONUS } from '@/lib/points'
 
-const COUNTRIES = [
-  'Saudi Arabia','Egypt','UAE','Kuwait','Bahrain','Oman','Qatar','Jordan','Lebanon',
-  'Iraq','Syria','Libya','Tunisia','Algeria','Morocco','Sudan','Yemen','Palestine',
-  'United States','United Kingdom','Canada','Australia','Germany','France',
-  'Turkey','Pakistan','India','Malaysia','Other',
+const TIME_TIERS = [
+  { key: 'quick',  label: 'Quick',  range: '≤ 5 min',   minutes: 5  },
+  { key: 'short',  label: 'Short',  range: '6–15 min',  minutes: 15 },
+  { key: 'medium', label: 'Medium', range: '16–30 min', minutes: 30 },
+  { key: 'long',   label: 'Long',   range: '30+ min',   minutes: 45 },
+]
+
+const AGE_RANGES = [
+  { label: 'General', min: null, max: null },
+  { label: 'Under 18', min: 1, max: 17 },
+  { label: '18 - 25 years', min: 18, max: 25 },
+  { label: '26 - 40 years', min: 26, max: 40 },
+  { label: '41 - 60 years', min: 41, max: 60 },
+  { label: 'Over 60', min: 61, max: 100 },
 ]
 
 export default function SubmitPage() {
@@ -19,282 +30,286 @@ export default function SubmitPage() {
   const [link, setLink]                 = useState('')
   const [specialty, setSpecialty]       = useState('')
   const [institution, setInstitution]   = useState('')
-  const [estimatedMinutes, setEst]      = useState(5)
+  const [estimatedMinutes, setEst]      = useState(TIME_TIERS[0].minutes)
 
-  // Sample criteria
-  const [selectedRoles, setSelectedRoles] = useState<string[]>([])
-  const [sex, setSex]                     = useState('any')
-  const [minAge, setMinAge]               = useState('')
-  const [maxAge, setMaxAge]               = useState('')
-  const [selectedCountries, setSelectedCountries] = useState<string[]>([])
-  const [otherCriteria, setOtherCriteria] = useState('')
-  const [customCountry, setCustomCountry] = useState('')
+  const [targetRole, setTargetRole]     = useState('')
+  const [targetCountry, setTargetCountry] = useState('')
+  const [targetGender, setTargetGender]   = useState('any')
+  
+  const [ageRangeIndex, setAgeRangeIndex] = useState('0')
 
   const [error, setError]     = useState('')
   const [loading, setLoading] = useState(false)
   const router = useRouter()
   const supabase = createClient()
 
-  function toggleRole(val: string) {
-    setSelectedRoles(r => r.includes(val) ? r.filter(x => x !== val) : [...r, val])
-  }
+  const allSpecialties = Object.values(SPECIALTY_GROUPS).flat()
 
-  function toggleCountry(val: string) {
-    if (val === 'Other') return // handled separately
-    setSelectedCountries(c => c.includes(val) ? c.filter(x => x !== val) : [...c, val])
+  const ALLOWED_SURVEY_DOMAINS = [
+    'forms.gle',
+    'docs.google.com',
+    'forms.office.com',
+    'forms.microsoft.com',
+    'surveymonkey.com',
+    'surveymonkey.co.uk',
+    'research.net',
+    'qualtrics.com',
+    'notion.so',
+    'notion.site',
+    'notion.com',
+  ]
+
+  function isValidSurveyLink(urlStr: string): boolean {
+    try {
+      const url = new URL(urlStr)
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') return false
+      const host = url.hostname.toLowerCase()
+      if (ALLOWED_SURVEY_DOMAINS.some(d => host === d || host.endsWith('.' + d))) return true
+      return host.split('.').some(part => part.includes('redcap'))
+    } catch { return false }
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
 
-    // Validate link
-    let parsed: URL
-    try { parsed = new URL(link) } catch { setError('Please enter a valid URL (include https://)'); return }
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-      setError('Link must start with https://'); return
-    }
-
-    // Specialty is mandatory
-    if (!specialty) { setError('Please select a field / specialty'); return }
-
-    setLoading(true)
-
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { router.push('/auth'); return }
-
-    // Spam limit: max 3 submissions per 24h
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-    const { count } = await supabase
-      .from('forms')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', user.id)
-      .gte('created_at', since)
-    if ((count ?? 0) >= 3) {
-      setError('You can submit up to 3 surveys per day. Try again tomorrow.')
-      setLoading(false)
+    if (!isValidSurveyLink(link.trim())) {
+      setError('Invalid link! Please use Google Forms, MS Forms, SurveyMonkey, Notion, REDCap, or Qualtrics.')
       return
     }
 
-    const countries = [...selectedCountries]
-    if (customCountry.trim()) countries.push(...customCountry.split(',').map(s => s.trim()).filter(Boolean))
+    setLoading(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { setLoading(false); router.push('/auth'); return }
 
-    const sample_criteria = {
-      roles:    selectedRoles,
-      sex,
-      min_age:  minAge ? parseInt(minAge) : null,
-      max_age:  maxAge ? parseInt(maxAge) : null,
-      countries,
-      other:    otherCriteria.trim(),
-    }
+    const selectedAgeData = AGE_RANGES[parseInt(ageRangeIndex)]
 
     const { error: insertError } = await supabase.from('forms').insert({
       user_id: user.id,
-      title: title.trim(),
-      description: description.trim(),
+      title: title.trim().slice(0, 120),
+      description: description.trim().slice(0, 400),
       link: link.trim(),
-      specialty,
-      institution: institution.trim(),
+      specialty: specialty.trim().slice(0, 150),
+      institution: institution.trim().slice(0, 150),
       estimated_minutes: estimatedMinutes,
-      sample_criteria,
+      sample_criteria: { 
+        roles: targetRole ? [targetRole] : [], 
+        countries: targetCountry ? [targetCountry] : [], 
+        sex: targetGender,
+        min_age: selectedAgeData.min,
+        max_age: selectedAgeData.max
+      },
     })
 
-    if (insertError) { setError(insertError.message); setLoading(false); return }
-    window.location.href = '/'
+    if (insertError) {
+      const m = insertError.message
+      setError(
+        m.includes('INVALID_LINK') ? 'Invalid link! Please use Google Forms, MS Forms, SurveyMonkey, Notion, REDCap, or Qualtrics.' :
+        m.includes('ACCOUNT_BANNED') ? 'Your account is suspended, so you can’t publish surveys right now.' :
+        m.includes('TITLE_TOO_LONG') ? 'Title is too long.' :
+        m.includes('DESCRIPTION_TOO_LONG') ? 'Description is too long.' :
+        m.includes('INVALID_DURATION') ? 'Please choose one of the time options.' :
+        m
+      )
+      setLoading(false)
+      return
+    }
+    router.push('/'); router.refresh()
   }
 
-  const pointsEarned = 10 + estimatedMinutes * 2
+  const pointsEarned = basePoints(estimatedMinutes)
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-10">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-slate-800">Submit your survey</h1>
-        <p className="text-slate-500 text-sm mt-1">
-          Fill in the details below. The more you fill others' surveys, the higher yours ranks.
-        </p>
-      </div>
+    <div className="min-h-screen bg-[#f8f9fa] text-slate-900 py-12 px-6 animate-fade-in">
+      
+      <style jsx global>{`
+        input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus {
+          -webkit-text-fill-color: #ffffff !important;
+          transition: background-color 600000s ease-in-out 0s !important;
+        }
+      `}</style>
 
-      <div className="bg-ivory border border-charcoal/10 rounded-xl p-4 mb-8 text-sm text-charcoal">
-        <p className="font-medium mb-1">How ranking works</p>
-        <p>Every survey you fill earns you points based on its estimated time. Your total points push your own survey higher in the list.</p>
-      </div>
+      <div className="max-w-2xl mx-auto space-y-10">
+        
+        <div className="space-y-6">
+          <Link href="/" className="inline-flex items-center gap-2 text-sm font-bold text-slate-400 hover:text-[#1e1a1d] transition-colors">
+            <ChevronLeft size={18} />
+            Back to home
+          </Link>
 
-      <div className="bg-white border border-ivory-border rounded-2xl p-7 shadow-sm">
-        {error && (
-          <div className="mb-5 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-4 py-3">{error}</div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-
-          {/* ── Basic info ── */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Study title *</label>
-            <input required value={title} onChange={e => setTitle(e.target.value)} maxLength={120}
-              placeholder="e.g. Prevalence of burnout among medical interns"
-              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
+          <div className="space-y-1">
+            <h1 className="text-3xl font-black text-[#1e1a1d] tracking-tight">Submit Survey</h1>
+            <p className="text-slate-500 text-sm font-medium">Broadcast your research protocol and define your target audience.</p>
           </div>
+        </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Description *</label>
-            <textarea required value={description} onChange={e => setDescription(e.target.value)}
-              rows={3} maxLength={400}
-              placeholder="Brief description of your study — what it's about, any key details"
-              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal resize-none" />
-            <p className="text-xs text-slate-400 mt-1">{description.length}/400</p>
-          </div>
+        <div className="relative rounded-[2.5rem] bg-[#3d353a] border border-white/5 p-8 sm:p-10 shadow-2xl backdrop-blur-md overflow-hidden">
+          
+          <form onSubmit={handleSubmit} className="relative z-10 space-y-8">
+            
+            <div className="space-y-6">
+              <div className="grid gap-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-white/30 ml-1">Research Title *</label>
+                  <input required maxLength={120} value={title} onChange={e => setTitle(e.target.value)}
+                    placeholder="e.g. Prevalence of burnout among medical interns"
+                    className="w-full bg-[#312a2f] border border-white/5 rounded-2xl px-5 py-4 text-sm font-medium text-white focus:outline-none focus:border-emerald-500 transition-all placeholder:text-white/10" />
+                </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
-              <Link2 size={14} /> Survey link *
-            </label>
-            <input required type="url" value={link} onChange={e => setLink(e.target.value)}
-              placeholder="https://forms.gle/..."
-              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-            <p className="text-xs text-slate-400 mt-1">Google Forms, SurveyMonkey, REDCap — any link works</p>
-          </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-white/30 ml-1">Abstract / Description *</label>
+                  <textarea required maxLength={400} value={description} onChange={e => setDescription(e.target.value)} rows={3}
+                    placeholder="Briefly overview your objectives and methodology..."
+                    className="w-full bg-[#312a2f] border border-white/5 rounded-2xl px-5 py-4 text-sm font-medium text-white focus:outline-none focus:border-emerald-500 transition-all placeholder:text-white/10 resize-none" />
+                  <p className="text-[10px] font-bold text-white/20 text-right mr-1 tabular-nums">{description.length}/400</p>
+                </div>
+              </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
-                <Clock size={14} /> Estimated time (min) *
-              </label>
-              <input type="number" required min={1} max={60}
-                value={estimatedMinutes} onChange={e => setEst(Number(e.target.value))}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-              <p className="text-xs text-emerald-600 mt-1">Fillers earn {pointsEarned} pts</p>
-            </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-white/30 ml-1 flex items-center gap-1.5">
+                    <Link2 size={13} /> Survey Link *
+                  </label>
+                  <input required type="url" value={link} onChange={e => setLink(e.target.value)}
+                    placeholder="https://forms.gle/..."
+                    className="w-full bg-[#312a2f] border border-white/5 rounded-2xl px-5 py-4 text-sm font-medium text-white focus:outline-none focus:border-emerald-500 transition-all" />
+                </div>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
-                <BookOpen size={14} /> Field / Specialty *
-              </label>
-              <select value={specialty} onChange={e => setSpecialty(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal bg-white">
-                <option value="">Select…</option>
-                {Object.entries(SPECIALTY_GROUPS).map(([group, items]) => (
-                  <optgroup key={group} label={group}>
-                    {items.map(s => <option key={s} value={s}>{s}</option>)}
-                  </optgroup>
-                ))}
-              </select>
-            </div>
-          </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-white/30 ml-1 flex items-center gap-1.5">
+                    <BookOpen size={13} /> Research Specialty *
+                  </label>
+                  <input list="specialty-list" required maxLength={150} value={specialty} onChange={e => setSpecialty(e.target.value)}
+                    placeholder="Search specialty..."
+                    className="w-full bg-[#312a2f] border border-white/5 rounded-2xl px-5 py-4 text-sm font-medium text-white focus:outline-none focus:border-emerald-500 transition-all" />
+                  <datalist id="specialty-list">
+                    {allSpecialties.map(s => <option key={s} value={s}>{s}</option>)}
+                  </datalist>
+                </div>
+              </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Institution <span className="text-slate-400 font-normal">(optional)</span>
-            </label>
-            <input value={institution} onChange={e => setInstitution(e.target.value)}
-              placeholder="e.g. King Abdulaziz University"
-              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-          </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-white/30 ml-1 flex items-center gap-1.5">
+                  <School size={13} /> Institution
+                </label>
+                <input maxLength={150} value={institution} onChange={e => setInstitution(e.target.value)}
+                  placeholder="e.g. KAU, PNU"
+                  className="w-full bg-[#312a2f] border border-white/5 rounded-2xl px-5 py-4 text-sm font-medium text-white focus:outline-none focus:border-emerald-500 transition-all" />
+              </div>
 
-          {/* ── Sample criteria ── */}
-          <div className="border-t border-ivory-border pt-6">
-            <div className="flex items-center gap-2 mb-1">
-              <Users size={16} className="text-charcoal" />
-              <h3 className="font-medium text-slate-800">Target population</h3>
-            </div>
-            <p className="text-xs text-slate-500 mb-4">
-              Define who your survey is for. This helps match your survey to the right people.
-            </p>
-
-            {/* Roles */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-slate-700 mb-3">
-                Who should fill this? <span className="text-slate-400 font-normal">(leave empty for anyone)</span>
-              </label>
-              <div className="space-y-3">
-                {Object.entries(ROLE_GROUPS).map(([group, roles]) => (
-                  <div key={group}>
-                    <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">{group}</p>
-                    <div className="flex flex-wrap gap-2">
-                      {roles.map(r => (
-                        <button key={r.value} type="button" onClick={() => toggleRole(r.value)}
-                          className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                            selectedRoles.includes(r.value)
-                              ? 'bg-charcoal text-white border-charcoal'
-                              : 'bg-white text-slate-600 border-slate-300 hover:border-charcoal/40'
-                          }`}>
-                          {r.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-white/30 ml-1 flex items-center gap-1.5">
+                  <Clock size={13} /> Estimated Time *
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {TIME_TIERS.map(t => {
+                    const active = estimatedMinutes === t.minutes
+                    return (
+                      <button
+                        key={t.key}
+                        type="button"
+                        onClick={() => setEst(t.minutes)}
+                        className={`rounded-2xl px-3 py-4 text-center border transition-all ${
+                          active
+                            ? 'bg-emerald-500/10 border-emerald-500 shadow-lg shadow-emerald-500/10'
+                            : 'bg-[#312a2f] border-white/5 hover:border-white/15'
+                        }`}
+                      >
+                        <p className={`text-sm font-black ${active ? 'text-emerald-400' : 'text-white'}`}>{t.label}</p>
+                        <p className={`text-[10px] font-bold mt-0.5 ${active ? 'text-emerald-400/70' : 'text-white/30'}`}>{t.range}</p>
+                        <p className={`text-[10px] font-black mt-2 tabular-nums ${active ? 'text-emerald-400' : 'text-white/20'}`}>
+                          {basePoints(t.minutes)} pts
+                        </p>
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="text-[10px] font-bold text-emerald-400 mt-1 ml-1 flex items-center gap-1">
+                  <Sparkles size={10} /> Participants earn {pointsEarned} pts
+                  <span className="text-white/30 font-medium">
+                    (+{EARLY_BIRD_BONUS} for the first 10, +{MATCH_BONUS} if they match your target audience)
+                  </span>
+                </p>
+                <p className="text-[10px] font-medium text-white/25 ml-1">
+                  Be honest. Once responses come in, the time shown to participants adjusts to the real average.
+                </p>
               </div>
             </div>
 
-            {/* Sex */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-slate-700 mb-2">Sex</label>
-              <div className="flex gap-2">
-                {[['any','Any'], ['male','Male only'], ['female','Female only']].map(([val, lbl]) => (
-                  <button key={val} type="button" onClick={() => setSex(val)}
-                    className={`text-xs px-4 py-1.5 rounded-full border transition-colors ${
-                      sex === val
-                        ? 'bg-charcoal text-white border-charcoal'
-                        : 'bg-white text-slate-600 border-slate-300 hover:border-charcoal/40'
-                    }`}>
-                    {lbl}
-                  </button>
-                ))}
+            <div className="pt-6 border-t border-white/5 space-y-6">
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-white/30 ml-1 flex items-center gap-1.5">
+                    <Users size={13} /> Target Designation
+                  </label>
+                  <select value={targetRole} onChange={e => setTargetRole(e.target.value)}
+                    className="w-full bg-[#312a2f] border border-white/5 rounded-2xl px-4 py-4 text-sm font-semibold text-white/90 focus:outline-none focus:border-emerald-500 transition-all">
+                    <option value="">General Audience</option>
+                    {Object.entries(ROLE_GROUPS).map(([group, roles]) => (
+                      <optgroup key={group} label={group} className="bg-[#3d353a] text-white/40">
+                        {roles.map(r => <option key={r.value} value={r.value} className="text-white">{r.label}</option>)}
+                      </optgroup>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-white/30 ml-1 flex items-center gap-1.5">
+                    <Globe size={13} /> Target Region
+                  </label>
+                  <select value={targetCountry} onChange={e => setTargetCountry(e.target.value)}
+                    className="w-full bg-[#312a2f] border border-white/5 rounded-2xl px-4 py-4 text-sm font-semibold text-white/90 focus:outline-none focus:border-emerald-500 transition-all">
+                    <option value="">Global </option>
+                    {COUNTRIES.map(c => <option key={c} value={c} className="bg-[#3d353a] text-white">{c}</option>)}
+                  </select>
+                </div>
               </div>
-            </div>
 
-            {/* Age range */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-slate-700 mb-2">Age range</label>
-              <div className="flex items-center gap-3">
-                <input type="number" min={1} max={120} value={minAge}
-                  onChange={e => setMinAge(e.target.value)} placeholder="Min"
-                  className="w-24 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-                <span className="text-slate-400 text-sm">to</span>
-                <input type="number" min={1} max={120} value={maxAge}
-                  onChange={e => setMaxAge(e.target.value)} placeholder="Max"
-                  className="w-24 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-                <span className="text-xs text-slate-400">Leave empty for any age</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-white/30 ml-1">Target Gender</label>
+                  <select value={targetGender} onChange={e => setTargetGender(e.target.value)}
+                    className="w-full bg-[#312a2f] border border-white/5 rounded-2xl px-4 py-4 text-sm font-semibold text-white/90 focus:outline-none focus:border-emerald-500 transition-all">
+                    <option value="any">Any Gender</option>
+                    <option value="male">Males Only</option>
+                    <option value="female">Females Only</option>
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-white/30 ml-1">Target Age </label>
+                  <select value={ageRangeIndex} onChange={e => setAgeRangeIndex(e.target.value)}
+                    className="w-full bg-[#312a2f] border border-white/5 rounded-2xl px-4 py-4 text-sm font-semibold text-white/90 focus:outline-none focus:border-emerald-500 transition-all">
+                    {AGE_RANGES.map((range, index) => (
+                      <option key={index} value={index} className="text-white">
+                        {range.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
+
             </div>
 
-            {/* Country */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-slate-700 mb-2">
-                Country / Region <span className="text-slate-400 font-normal">(leave empty for any)</span>
-              </label>
-              <div className="flex flex-wrap gap-2 mb-2">
-                {COUNTRIES.filter(c => c !== 'Other').map(c => (
-                  <button key={c} type="button" onClick={() => toggleCountry(c)}
-                    className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                      selectedCountries.includes(c)
-                        ? 'bg-charcoal text-white border-charcoal'
-                        : 'bg-white text-slate-600 border-slate-300 hover:border-charcoal/40'
-                    }`}>
-                    {c}
-                  </button>
-                ))}
+            {error && (
+              <div className="flex items-center gap-2 p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-400 text-xs font-bold animate-fade-in">
+                <AlertCircle size={16} /> {error}
               </div>
-              <input value={customCountry} onChange={e => setCustomCountry(e.target.value)}
-                placeholder="Other countries (comma-separated)"
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-            </div>
+            )}
 
-            {/* Other */}
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                Other requirements <span className="text-slate-400 font-normal">(optional free text)</span>
-              </label>
-              <input value={otherCriteria} onChange={e => setOtherCriteria(e.target.value)}
-                placeholder="e.g. Currently enrolled in clinical rotations, diagnosed with diabetes, etc."
-                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-            </div>
-          </div>
+            <button type="submit" disabled={loading}
+              className="group w-full bg-white text-[#1e1a1d] py-5 rounded-[2.5rem] text-xs font-black uppercase tracking-[0.15em] hover:bg-white/90 active:scale-[0.99] transition-all shadow-2xl flex items-center justify-center gap-2 disabled:opacity-50">
+              {loading ? 'Executing Protocol...' : (
+                <>
+                  Submit
+                  <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
+                </>
+              )}
+            </button>
 
-          <button type="submit" disabled={loading}
-            className="w-full flex items-center justify-center gap-2 bg-charcoal text-white py-2.5 rounded-lg text-sm font-medium hover:bg-charcoal-deep transition-colors disabled:opacity-60">
-            {loading ? 'Submitting…' : <><span>Submit survey</span><ChevronRight size={16} /></>}
-          </button>
-        </form>
+          </form>
+        </div>
       </div>
     </div>
   )
