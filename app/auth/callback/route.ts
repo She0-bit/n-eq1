@@ -3,12 +3,17 @@ import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
+
+function safeNext(raw: string | null): string {
+  if (!raw) return '/'
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) return '/'
+  return raw
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
-  
- 
-  const next = searchParams.get('next') ?? '/auth/update-password'
+  const next = safeNext(searchParams.get('next'))
 
   if (code) {
     const cookieStore = await cookies()
@@ -17,8 +22,8 @@ export async function GET(request: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
-          getAll() { 
-            return cookieStore.getAll() 
+          getAll() {
+            return cookieStore.getAll()
           },
           setAll(cookiesToSet) {
             try {
@@ -39,6 +44,5 @@ export async function GET(request: NextRequest) {
     }
   }
 
- 
   return NextResponse.redirect(`${origin}/auth?error=link_expired`)
 }
