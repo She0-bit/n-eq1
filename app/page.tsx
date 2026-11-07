@@ -51,7 +51,7 @@ export default async function HomePage({
   
   if (!user) {
     const { count: userCount } = await supabase
-      .from('profiles').select('*', { count: 'exact', head: true }).not('username', 'is', null)
+      .from('public_profiles').select('id', { count: 'exact', head: true }).not('username', 'is', null)
     const totalFills = feed.reduce((a, f) => a + (f.fill_count ?? 0), 0)
     return (
       <LandingView
