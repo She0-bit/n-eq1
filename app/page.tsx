@@ -82,7 +82,7 @@ export default async function HomePage({
   const suggestedFeed = isProfileComplete && pObj
     ? visibleFeed.filter(form => {
         const criteria = (form as any).sample_criteria
-        return criteria ? matchesCriteria(pObj, criteria) : false
+        return criteria ? matchesCriteria(criteria, pObj) : false
       })
     : []
 
