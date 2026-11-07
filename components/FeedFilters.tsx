@@ -7,9 +7,9 @@ import { useState, useEffect } from 'react'
 
 const DURATION_OPTIONS = [
   { label: 'Any length', value: '' },
-  { label: '≤ 5 min',   value: '5' },
-  { label: '≤ 10 min',  value: '10' },
-  { label: '≤ 15 min',  value: '15' },
+  { label: 'Quick (≤ 5 min)',   value: '5' },
+  { label: 'Short (≤ 15 min)',  value: '15' },
+  { label: 'Medium (≤ 30 min)', value: '30' },
 ]
 
 export default function FeedFilters() {
@@ -27,9 +27,16 @@ export default function FeedFilters() {
 
   function navigate(q: string, spec: string, maxMin: string) {
     const params = new URLSearchParams()
-    if (q.trim()) params.set('q', q.trim())
+    const cleanQ = q.trim().slice(0, 100)
+    if (cleanQ) params.set('q', cleanQ)
     if (spec)     params.set('specialty', spec)
     if (maxMin)   params.set('max_min', maxMin)
+    
+    const limitSug = searchParams.get('limit_sug')
+    const limitMain = searchParams.get('limit_main')
+    if (limitSug) params.set('limit_sug', limitSug)
+    if (limitMain) params.set('limit_main', limitMain)
+
     router.push(`/?${params.toString()}`)
   }
 
@@ -42,46 +49,43 @@ export default function FeedFilters() {
   const hasFilters    = !!(currentQ || currentSpecialty || currentMaxMin)
 
   return (
-    <div id="feed" className="mb-5 space-y-2">
-      {/* Main row: search + filter toggle */}
+    <div id="feed" className="mb-5 space-y-3 animate-fade-in">
       <div className="flex gap-3">
-        {/* Search input */}
         <div className="flex-1 flex gap-2">
           <div className="relative flex-1">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
               value={searchVal}
+              maxLength={100}
               onChange={e => setSearchVal(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && navigate(searchVal, currentSpecialty, currentMaxMin)}
               placeholder="Search by title…"
-              className="w-full pl-9 pr-4 py-2.5 border border-ivory-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-charcoal"
+              className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm bg-white text-slate-800 focus:outline-none focus:border-[#3d353a] transition-all placeholder:text-slate-400"
             />
           </div>
-          {/* Search button visible on mobile */}
           <button
             type="button"
             onClick={() => navigate(searchVal, currentSpecialty, currentMaxMin)}
-            className="sm:hidden bg-charcoal text-white px-4 py-2.5 rounded-lg text-sm font-medium shrink-0"
+            className="sm:hidden bg-[#3d353a] text-white px-4 py-2.5 rounded-xl text-sm font-bold shrink-0 hover:bg-[#1e1a1d] transition-colors"
           >
             Search
           </button>
         </div>
 
-        {/* Advanced filter toggle */}
         <button
           type="button"
           onClick={() => setShowAdvanced(v => !v)}
           title="Advanced filters"
-          className={`flex items-center gap-1.5 px-3 py-2.5 rounded-lg border text-sm transition-colors shrink-0 ${
+          className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl border text-sm font-bold transition-all shrink-0 ${
             showAdvanced || advancedCount > 0
-              ? 'bg-charcoal text-white border-charcoal'
-              : 'bg-white text-slate-500 border-ivory-border hover:border-charcoal/40 hover:text-slate-700'
+              ? 'bg-[#3d353a] text-white border-[#3d353a] shadow-sm'
+              : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300 hover:text-slate-700'
           }`}
         >
           <SlidersHorizontal size={15} />
           <span className="hidden sm:inline">Filters</span>
           {advancedCount > 0 && (
-            <span className="text-xs bg-white/25 px-1.5 py-0.5 rounded-full font-medium">
+            <span className="text-xs bg-emerald-500 text-white px-1.5 py-0.5 rounded-full font-bold">
               {advancedCount}
             </span>
           )}
@@ -91,53 +95,45 @@ export default function FeedFilters() {
           <button
             type="button"
             onClick={clearAll}
-            className="self-center flex items-center gap-1 text-sm text-slate-400 hover:text-slate-600 whitespace-nowrap transition-colors"
+            className="self-center flex items-center gap-1 text-sm font-bold text-slate-400 hover:text-rose-500 whitespace-nowrap transition-colors ml-1"
           >
             <X size={14} /> Clear
           </button>
         )}
       </div>
 
-      {/* Advanced panel */}
       {showAdvanced && (
-        <div className="bg-white border border-ivory-border rounded-xl px-5 py-4 flex flex-col sm:flex-row gap-6">
+        <div className="bg-white border border-slate-100 rounded-2xl px-5 py-5 flex flex-col sm:flex-row gap-5 shadow-sm animate-fade-in">
 
-          {/* Specialty */}
           <div className="flex-1">
-            <p className="text-xs font-medium text-slate-600 mb-2">Field / Specialty</p>
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 ml-1">Research Field / Specialty</p>
             <select
               value={currentSpecialty}
               onChange={e => navigate(searchVal, e.target.value, currentMaxMin)}
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-charcoal"
+              className="w-full border border-slate-200 rounded-xl px-3 py-3 text-sm bg-white text-slate-700 focus:outline-none focus:border-[#3d353a] transition-all font-semibold"
             >
               <option value="">All specialties</option>
               {Object.entries(SPECIALTY_GROUPS).map(([group, items]) => (
-                <optgroup key={group} label={group}>
-                  {items.map(s => <option key={s} value={s}>{s}</option>)}
+                <optgroup key={group} label={group} className="text-slate-400 bg-white font-medium">
+                  {items.map(s => <option key={s} value={s} className="text-slate-800 font-semibold">{s}</option>)}
                 </optgroup>
               ))}
             </select>
           </div>
 
-          {/* Duration */}
-          <div>
-            <p className="text-xs font-medium text-slate-600 mb-2">Max duration</p>
-            <div className="flex flex-wrap gap-2">
+          <div className="w-full sm:w-52">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 ml-1">Max Duration</p>
+            <select
+              value={DURATION_OPTIONS.some(o => o.value === currentMaxMin) ? currentMaxMin : ''}
+              onChange={e => navigate(searchVal, currentSpecialty, e.target.value)}
+              className="w-full border border-slate-200 rounded-xl px-3 py-3 text-sm bg-white text-slate-700 focus:outline-none focus:border-[#3d353a] transition-all font-semibold"
+            >
               {DURATION_OPTIONS.map(opt => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => navigate(searchVal, currentSpecialty, opt.value)}
-                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                    currentMaxMin === opt.value
-                      ? 'bg-charcoal text-white border-charcoal'
-                      : 'bg-white text-slate-600 border-slate-300 hover:border-charcoal/40'
-                  }`}
-                >
+                <option key={opt.value} value={opt.value} className="text-slate-800 font-semibold">
                   {opt.label}
-                </button>
+                </option>
               ))}
-            </div>
+            </select>
           </div>
 
         </div>
