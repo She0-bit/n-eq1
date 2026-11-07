@@ -2,333 +2,328 @@
 
 import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase-browser'
-import { SPECIALTY_GROUPS, ROLE_GROUPS } from '@/lib/types'
-import { Link2, Clock, BookOpen, Save, Users, ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
+import { createClient } from '@/lib/supabase-browser'
+import { SPECIALTY_GROUPS, ROLE_GROUPS, COUNTRIES } from '@/lib/types'
+import {
+  Link2, Clock, BookOpen, Users, Sparkles, AlertCircle, School, Globe,
+  Save, Check, Loader2, ExternalLink, Lock,
+} from 'lucide-react'
+import { basePoints, EARLY_BIRD_BONUS, MATCH_BONUS } from '@/lib/points'
 
-const COUNTRIES = [
-  'Saudi Arabia','Egypt','UAE','Kuwait','Bahrain','Oman','Qatar','Jordan','Lebanon',
-  'Iraq','Syria','Libya','Tunisia','Algeria','Morocco','Sudan','Yemen','Palestine',
-  'United States','United Kingdom','Canada','Australia','Germany','France',
-  'Turkey','Pakistan','India','Malaysia','Other',
+const TIME_TIERS = [
+  { key: 'quick',  label: 'Quick',  range: '≤ 5 min',   minutes: 5  },
+  { key: 'short',  label: 'Short',  range: '6–15 min',  minutes: 15 },
+  { key: 'medium', label: 'Medium', range: '16–30 min', minutes: 30 },
+  { key: 'long',   label: 'Long',   range: '30+ min',   minutes: 45 },
 ]
+
+function toTier(m: number) {
+  if (m <= 5) return 5
+  if (m <= 15) return 15
+  if (m <= 30) return 30
+  return 45
+}
+
+const AGE_RANGES = [
+  { label: 'General',       min: null as number | null, max: null as number | null },
+  { label: 'Under 18',      min: 1,  max: 17 },
+  { label: '18 - 25 years', min: 18, max: 25 },
+  { label: '26 - 40 years', min: 26, max: 40 },
+  { label: '41 - 60 years', min: 41, max: 60 },
+  { label: 'Over 60',       min: 61, max: 100 },
+]
+
+const ALLOWED_SURVEY_DOMAINS = [
+  'forms.gle', 'docs.google.com', 'forms.office.com', 'forms.microsoft.com',
+  'surveymonkey.com', 'surveymonkey.co.uk', 'research.net', 'qualtrics.com',
+  'notion.so', 'notion.site', 'notion.com',
+]
+
+function isValidSurveyLink(urlStr: string): boolean {
+  try {
+    const url = new URL(urlStr)
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false
+    const host = url.hostname.toLowerCase()
+    if (ALLOWED_SURVEY_DOMAINS.some(d => host === d || host.endsWith('.' + d))) return true
+    return host.split('.').some(part => part.includes('redcap'))
+  } catch { return false }
+}
+
+const inputCls  = 'w-full bg-[#312a2f] border border-white/5 rounded-2xl px-5 py-4 text-sm font-medium text-white focus:outline-none focus:border-emerald-500 transition-all placeholder:text-white/10'
+const selectCls = 'w-full bg-[#312a2f] border border-white/5 rounded-2xl px-4 py-4 text-sm font-semibold text-white/90 focus:outline-none focus:border-emerald-500 transition-all'
+const labelCls  = 'text-[10px] font-black uppercase tracking-widest text-white/30 ml-1 flex items-center gap-1.5'
 
 export default function EditFormClient({ form }: { form: any }) {
   const c = form.sample_criteria ?? {}
 
-  const [title, setTitle]             = useState(form.title ?? '')
-  const [description, setDescription] = useState(form.description ?? '')
-  const [link, setLink]               = useState(form.link ?? '')
-  const [specialty, setSpecialty]     = useState(form.specialty ?? '')
-  const [institution, setInstitution] = useState(form.institution ?? '')
-  const [estimatedMinutes, setEst]    = useState(form.estimated_minutes ?? 5)
-  const [isActive, setIsActive]       = useState(form.is_active !== false)
+  const matchedAge = AGE_RANGES.findIndex(r => r.min === (c.min_age ?? null) && r.max === (c.max_age ?? null))
+  const customAge  = matchedAge === -1 ? { label: `Custom (${c.min_age ?? '?'}–${c.max_age ?? '?'})`, min: c.min_age ?? null, max: c.max_age ?? null } : null
+  const ageOptions = customAge ? [...AGE_RANGES, customAge] : AGE_RANGES
 
-  // Sample criteria
-  const [selectedRoles, setSelectedRoles]       = useState<string[]>(c.roles ?? [])
-  const [sex, setSex]                           = useState(c.sex ?? 'any')
-  const [minAge, setMinAge]                     = useState(c.min_age?.toString() ?? '')
-  const [maxAge, setMaxAge]                     = useState(c.max_age?.toString() ?? '')
-  const [selectedCountries, setSelectedCountries] = useState<string[]>(c.countries ?? [])
-  const [otherCriteria, setOtherCriteria]       = useState(c.other ?? '')
-  const [customCountry, setCustomCountry]       = useState('')
+  const [title, setTitle]             = useState<string>(form.title ?? '')
+  const [description, setDescription] = useState<string>(form.description ?? '')
+  const [link, setLink]               = useState<string>(form.link ?? '')
+  const [specialty, setSpecialty]     = useState<string>(form.specialty ?? '')
+  const [institution, setInstitution] = useState<string>(form.institution ?? '')
+  const [estimatedMinutes, setEst]    = useState<number>(toTier(form.estimated_minutes ?? 5))
+  const [isActive, setIsActive]       = useState<boolean>(form.is_active !== false)
 
-  const [error, setError]     = useState('')
-  const [saving, setSaving]   = useState(false)
-  const [saved, setSaved]     = useState(false)
+  const [targetRole, setTargetRole]       = useState<string>(c.roles?.[0] ?? '')
+  const [targetCountry, setTargetCountry] = useState<string>(c.countries?.[0] ?? '')
+  const [targetGender, setTargetGender]   = useState<string>(c.sex ?? 'any')
+  const [ageRangeIndex, setAgeRangeIndex] = useState<string>(String(matchedAge === -1 ? ageOptions.length - 1 : matchedAge))
+
+  const [error, setError]   = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
   const router   = useRouter()
   const supabase = createClient()
 
-  // Snapshot of initial values to detect changes
-  const initial = useRef({
-    title, description, link, specialty, institution,
-    estimatedMinutes, isActive,
-    roles:     JSON.stringify([...c.roles ?? []].sort()),
-    sex:       c.sex ?? 'any',
-    minAge:    c.min_age?.toString() ?? '',
-    maxAge:    c.max_age?.toString() ?? '',
-    countries: JSON.stringify([...c.countries ?? []].sort()),
-    other:     c.other ?? '',
+  const allSpecialties = Object.values(SPECIALTY_GROUPS).flat()
+  const locked = form.moderation_status && form.moderation_status !== 'ok'
+
+  const snapshot = () => JSON.stringify({
+    title, description, link, specialty, institution, estimatedMinutes, isActive,
+    targetRole, targetCountry, targetGender, ageRangeIndex,
   })
-
-  const isDirty =
-    title             !== initial.current.title             ||
-    description       !== initial.current.description       ||
-    link              !== initial.current.link              ||
-    specialty         !== initial.current.specialty         ||
-    institution       !== initial.current.institution       ||
-    estimatedMinutes  !== initial.current.estimatedMinutes  ||
-    isActive          !== initial.current.isActive          ||
-    JSON.stringify([...selectedRoles].sort())     !== initial.current.roles    ||
-    sex               !== initial.current.sex               ||
-    minAge            !== initial.current.minAge            ||
-    maxAge            !== initial.current.maxAge            ||
-    JSON.stringify([...selectedCountries].sort()) !== initial.current.countries ||
-    otherCriteria     !== initial.current.other
-
-  function toggleRole(val: string) {
-    setSelectedRoles(r => r.includes(val) ? r.filter(x => x !== val) : [...r, val])
-  }
-
-  function toggleCountry(val: string) {
-    setSelectedCountries(c => c.includes(val) ? c.filter(x => x !== val) : [...c, val])
-  }
+  const initial = useRef(snapshot())
+  const isDirty = snapshot() !== initial.current
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
-    setError('')
-    try { new URL(link) } catch { setError('Please enter a valid URL (include https://)'); return }
+    setError(''); setSaved(false)
+
+    if (!isValidSurveyLink(link.trim())) {
+      setError('Invalid link! Please use Google Forms, MS Forms, SurveyMonkey, Notion, REDCap, or Qualtrics.')
+      return
+    }
+
     setSaving(true)
+    const age = ageOptions[parseInt(ageRangeIndex)] ?? AGE_RANGES[0]
 
-    const countries = [...selectedCountries]
-    if (customCountry.trim()) countries.push(...customCountry.split(',').map(s => s.trim()).filter(Boolean))
-
-    const sample_criteria = {
-      roles:    selectedRoles,
-      sex,
-      min_age:  minAge ? parseInt(minAge) : null,
-      max_age:  maxAge ? parseInt(maxAge) : null,
-      countries,
-      other:    otherCriteria.trim(),
-    }
-
-    const { error: updateError } = await supabase.from('forms').update({
-      title: title.trim(),
-      description: description.trim(),
-      link: link.trim(),
+    const { data, error: updateError } = await supabase.from('forms').update({
+      title:             title.trim(),
+      description:       description.trim(),
+      link:              link.trim(),
       specialty,
-      institution: institution.trim(),
+      institution:       institution.trim(),
       estimated_minutes: estimatedMinutes,
-      is_active: isActive,
-      sample_criteria,
-    }).eq('id', form.id)
+      is_active:         isActive,
+      sample_criteria: {
+        ...c,
+        roles:     targetRole ? [targetRole] : [],
+        countries: targetCountry ? [targetCountry] : [],
+        sex:       targetGender,
+        min_age:   age.min,
+        max_age:   age.max,
+      },
+    }).eq('id', form.id).select('id')
 
-    if (updateError) { setError(updateError.message); setSaving(false); return }
-
-    // Reset snapshot so button disables again
-    initial.current = {
-      title, description, link, specialty, institution,
-      estimatedMinutes, isActive,
-      roles:     JSON.stringify([...selectedRoles].sort()),
-      sex,
-      minAge, maxAge,
-      countries: JSON.stringify([...selectedCountries].sort()),
-      other:     otherCriteria.trim(),
-    }
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2500)
     setSaving(false)
+    if (updateError) {
+      const m = updateError.message
+      setError(
+        m.includes('INVALID_LINK') ? 'Invalid link! Please use Google Forms, MS Forms, SurveyMonkey, Notion, REDCap, or Qualtrics.' :
+        m.includes('TITLE_TOO_LONG') ? 'Title is too long.' :
+        m.includes('DESCRIPTION_TOO_LONG') ? 'Description is too long.' :
+        m.includes('INVALID_DURATION') ? 'Please choose one of the time options.' :
+        m
+      )
+      return
+    }
+    if (!data || data.length === 0) {
+      setError('You can only edit your own surveys.')
+      return
+    }
+
+    initial.current = snapshot()
+    setSaved(true)
+    setTimeout(() => setSaved(false), 3000)
     router.refresh()
   }
 
-  const pointsEarned = 10 + estimatedMinutes * 2
+  const pointsEarned = basePoints(estimatedMinutes)
 
   return (
-    <div className="bg-white border border-ivory-border rounded-2xl p-7 shadow-sm">
-      <Link href="/profile" className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-6 transition-colors">
-        <ArrowLeft size={14} /> Back to my surveys
-      </Link>
+    <div className="relative rounded-[2.5rem] bg-[#3d353a] border border-white/5 p-8 sm:p-10 shadow-2xl overflow-hidden">
+      <style jsx global>{`
+        input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus {
+          -webkit-text-fill-color: #ffffff !important;
+          transition: background-color 600000s ease-in-out 0s !important;
+        }
+      `}</style>
 
-      {error && (
-        <div className="mb-5 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-4 py-3">{error}</div>
-      )}
+      <form onSubmit={handleSave} className="relative z-10 space-y-8">
 
-      <form onSubmit={handleSave} className="space-y-6">
+        {locked ? (
+          <div className="flex items-start gap-3 rounded-2xl px-5 py-4 bg-rose-500/10 border border-rose-500/20">
+            <Lock size={16} className="text-rose-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-bold text-rose-300">Hidden by moderation</p>
+              <p className="text-xs text-white/40 mt-0.5">
+                This survey is under review and can't be made visible until an admin restores it. You can still edit its details.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className={`flex items-center justify-between gap-4 rounded-2xl px-5 py-4 border transition-colors ${
+            isActive ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-white/[0.03] border-white/5'
+          }`}>
+            <div>
+              <p className={`text-sm font-bold ${isActive ? 'text-emerald-400' : 'text-white/70'}`}>
+                {isActive ? 'Survey is live' : 'Survey is paused'}
+              </p>
+              <p className="text-xs text-white/40 mt-0.5">
+                {isActive ? 'Visible in the feed and accepting responses.' : 'Hidden from the feed. No one can fill it.'}
+              </p>
+            </div>
+            <button type="button" onClick={() => setIsActive(a => !a)} aria-label="Toggle active"
+              className={`relative shrink-0 inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                isActive ? 'bg-emerald-500' : 'bg-white/10'
+              }`}>
+              <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                isActive ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
+        )}
 
-        {/* Active / Inactive toggle */}
-        <div className={`flex items-center justify-between rounded-xl px-4 py-3 border ${
-          isActive ? 'bg-emerald-50 border-emerald-200' : 'bg-ivory-dark border-ivory-border'
-        }`}>
-          <div>
-            <p className="text-sm font-medium text-slate-800">
-              {isActive ? '✅ Survey is active' : '⏸️ Survey is inactive'}
+        <div className="space-y-6">
+          <div className="space-y-2">
+            <label className={labelCls}>Research Title *</label>
+            <input required value={title} onChange={e => setTitle(e.target.value)} maxLength={120}
+              placeholder="e.g. Prevalence of burnout among medical interns" className={inputCls} />
+          </div>
+
+          <div className="space-y-2">
+            <label className={labelCls}>Abstract / Description *</label>
+            <textarea required value={description} onChange={e => setDescription(e.target.value)} rows={3} maxLength={400}
+              placeholder="Briefly overview your objectives and methodology..."
+              className={`${inputCls} resize-none`} />
+            <p className="text-[10px] font-bold text-white/20 text-right mr-1 tabular-nums">{description.length}/400</p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <label className={labelCls}><Link2 size={13} /> Survey Link *</label>
+              <input required type="url" value={link} onChange={e => setLink(e.target.value)}
+                placeholder="https://forms.gle/..." className={inputCls} />
+            </div>
+            <div className="space-y-2">
+              <label className={labelCls}><BookOpen size={13} /> Research Specialty *</label>
+              <input list="specialty-list" required value={specialty} onChange={e => setSpecialty(e.target.value)}
+                placeholder="Search specialty..." className={inputCls} />
+              <datalist id="specialty-list">
+                {allSpecialties.map(s => <option key={s} value={s}>{s}</option>)}
+              </datalist>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className={labelCls}><School size={13} /> Institution</label>
+            <input value={institution} onChange={e => setInstitution(e.target.value)}
+              placeholder="e.g. KAU, PNU" className={inputCls} />
+          </div>
+
+          <div className="space-y-2">
+            <label className={labelCls}><Clock size={13} /> Estimated Time *</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              {TIME_TIERS.map(t => {
+                const active = estimatedMinutes === t.minutes
+                return (
+                  <button key={t.key} type="button" onClick={() => setEst(t.minutes)}
+                    className={`rounded-2xl px-3 py-4 text-center border transition-all ${
+                      active
+                        ? 'bg-emerald-500/10 border-emerald-500 shadow-lg shadow-emerald-500/10'
+                        : 'bg-[#312a2f] border-white/5 hover:border-white/15'
+                    }`}>
+                    <p className={`text-sm font-black ${active ? 'text-emerald-400' : 'text-white'}`}>{t.label}</p>
+                    <p className={`text-[10px] font-bold mt-0.5 ${active ? 'text-emerald-400/70' : 'text-white/30'}`}>{t.range}</p>
+                    <p className={`text-[10px] font-black mt-2 tabular-nums ${active ? 'text-emerald-400' : 'text-white/20'}`}>
+                      {basePoints(t.minutes)} pts
+                    </p>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-[10px] font-bold text-emerald-400 mt-1 ml-1 flex items-center gap-1 flex-wrap">
+              <Sparkles size={10} /> Participants earn {pointsEarned} pts
+              <span className="text-white/30 font-medium">
+                (+{EARLY_BIRD_BONUS} for the first 10, +{MATCH_BONUS} if they match your target audience)
+              </span>
             </p>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {isActive ? 'Visible in the feed and accepting responses' : 'Hidden from the feed — no one can fill it'}
-            </p>
-          </div>
-          <button type="button" onClick={() => setIsActive(a => !a)}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-              isActive ? 'bg-emerald-500' : 'bg-slate-300'
-            }`}>
-            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              isActive ? 'translate-x-6' : 'translate-x-1'
-            }`} />
-          </button>
-        </div>
-
-        {/* Title */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">Study title *</label>
-          <input required value={title} onChange={e => setTitle(e.target.value)} maxLength={120}
-            placeholder="e.g. Prevalence of burnout among medical interns"
-            className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-        </div>
-
-        {/* Description */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">Description *</label>
-          <textarea required value={description} onChange={e => setDescription(e.target.value)}
-            rows={3} maxLength={400}
-            placeholder="Brief description of your study"
-            className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal resize-none" />
-          <p className="text-xs text-slate-400 mt-1">{description.length}/400</p>
-        </div>
-
-        {/* Link */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
-            <Link2 size={14} /> Survey link *
-          </label>
-          <input required type="url" value={link} onChange={e => setLink(e.target.value)}
-            placeholder="https://forms.gle/..."
-            className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-        </div>
-
-        {/* Duration + Specialty */}
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
-              <Clock size={14} /> Estimated time (min) *
-            </label>
-            <input type="number" required min={1} max={60}
-              value={estimatedMinutes} onChange={e => setEst(Number(e.target.value))}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-            <p className="text-xs text-emerald-600 mt-1">Fillers earn {pointsEarned} pts</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
-              <BookOpen size={14} /> Field / Specialty
-            </label>
-            <select value={specialty} onChange={e => setSpecialty(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal bg-white">
-              <option value="">Select…</option>
-              {Object.entries(SPECIALTY_GROUPS).map(([group, items]) => (
-                <optgroup key={group} label={group}>
-                  {items.map(s => <option key={s} value={s}>{s}</option>)}
-                </optgroup>
-              ))}
-            </select>
           </div>
         </div>
 
-        {/* Institution */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">
-            Institution <span className="text-slate-400 font-normal">(optional)</span>
-          </label>
-          <input value={institution} onChange={e => setInstitution(e.target.value)}
-            placeholder="e.g. King Abdulaziz University"
-            className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-        </div>
+        <div className="pt-6 border-t border-white/5 space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <label className={labelCls}><Users size={13} /> Target Designation</label>
+              <select value={targetRole} onChange={e => setTargetRole(e.target.value)} className={selectCls}>
+                <option value="">General Audience</option>
+                {Object.entries(ROLE_GROUPS).map(([group, roles]) => (
+                  <optgroup key={group} label={group} className="bg-[#3d353a] text-white/40">
+                    {roles.map(r => <option key={r.value} value={r.value} className="text-white">{r.label}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
 
-        {/* ── Sample criteria ── */}
-        <div className="border-t border-ivory-border pt-6">
-          <div className="flex items-center gap-2 mb-1">
-            <Users size={16} className="text-charcoal" />
-            <h3 className="font-medium text-slate-800">Target population</h3>
-          </div>
-          <p className="text-xs text-slate-500 mb-4">
-            Define who your survey is for. Leave everything empty to accept anyone.
-          </p>
-
-          {/* Roles */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-slate-700 mb-3">Who should fill this?</label>
-            <div className="space-y-3">
-              {Object.entries(ROLE_GROUPS).map(([group, roles]) => (
-                <div key={group}>
-                  <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">{group}</p>
-                  <div className="flex flex-wrap gap-2">
-                    {roles.map(r => (
-                      <button key={r.value} type="button" onClick={() => toggleRole(r.value)}
-                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                          selectedRoles.includes(r.value)
-                            ? 'bg-charcoal text-white border-charcoal'
-                            : 'bg-white text-slate-600 border-slate-300 hover:border-charcoal/40'
-                        }`}>
-                        {r.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
+            <div className="space-y-2">
+              <label className={labelCls}><Globe size={13} /> Target Region</label>
+              <select value={targetCountry} onChange={e => setTargetCountry(e.target.value)} className={selectCls}>
+                <option value="">Global</option>
+                {targetCountry && !COUNTRIES.includes(targetCountry) && (
+                  <option value={targetCountry} className="bg-[#3d353a] text-white">{targetCountry}</option>
+                )}
+                {COUNTRIES.map(ct => <option key={ct} value={ct} className="bg-[#3d353a] text-white">{ct}</option>)}
+              </select>
             </div>
           </div>
 
-          {/* Sex */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-slate-700 mb-2">Sex</label>
-            <div className="flex gap-2">
-              {[['any','Any'], ['male','Male only'], ['female','Female only']].map(([val, lbl]) => (
-                <button key={val} type="button" onClick={() => setSex(val)}
-                  className={`text-xs px-4 py-1.5 rounded-full border transition-colors ${
-                    sex === val
-                      ? 'bg-charcoal text-white border-charcoal'
-                      : 'bg-white text-slate-600 border-slate-300 hover:border-charcoal/40'
-                  }`}>
-                  {lbl}
-                </button>
-              ))}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <label className={labelCls}>Target Gender</label>
+              <select value={targetGender} onChange={e => setTargetGender(e.target.value)} className={selectCls}>
+                <option value="any">Any Gender</option>
+                <option value="male">Males Only</option>
+                <option value="female">Females Only</option>
+              </select>
             </div>
-          </div>
 
-          {/* Age */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-slate-700 mb-2">Age range</label>
-            <div className="flex items-center gap-3">
-              <input type="number" min={1} max={120} value={minAge}
-                onChange={e => setMinAge(e.target.value)} placeholder="Min"
-                className="w-24 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-              <span className="text-slate-400 text-sm">to</span>
-              <input type="number" min={1} max={120} value={maxAge}
-                onChange={e => setMaxAge(e.target.value)} placeholder="Max"
-                className="w-24 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-              <span className="text-xs text-slate-400">Leave empty for any age</span>
+            <div className="space-y-2">
+              <label className={labelCls}>Target Age</label>
+              <select value={ageRangeIndex} onChange={e => setAgeRangeIndex(e.target.value)} className={selectCls}>
+                {ageOptions.map((r, i) => (
+                  <option key={i} value={i} className="text-white">{r.label}</option>
+                ))}
+              </select>
             </div>
-          </div>
-
-          {/* Countries */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-slate-700 mb-2">Country / Region</label>
-            <div className="flex flex-wrap gap-2 mb-2">
-              {COUNTRIES.filter(c => c !== 'Other').map(c => (
-                <button key={c} type="button" onClick={() => toggleCountry(c)}
-                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                    selectedCountries.includes(c)
-                      ? 'bg-charcoal text-white border-charcoal'
-                      : 'bg-white text-slate-600 border-slate-300 hover:border-charcoal/40'
-                  }`}>
-                  {c}
-                </button>
-              ))}
-            </div>
-            <input value={customCountry} onChange={e => setCustomCountry(e.target.value)}
-              placeholder="Other countries (comma-separated)"
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
-          </div>
-
-          {/* Other */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Other requirements <span className="text-slate-400 font-normal">(optional)</span>
-            </label>
-            <input value={otherCriteria} onChange={e => setOtherCriteria(e.target.value)}
-              placeholder="e.g. Currently enrolled in clinical rotations, diagnosed with diabetes…"
-              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-charcoal" />
           </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-3 pt-2">
+        {error && (
+          <div className="flex items-center gap-2 p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-400 text-xs font-bold animate-fade-in">
+            <AlertCircle size={16} /> {error}
+          </div>
+        )}
+        {saved && (
+          <div className="flex items-center justify-between gap-2 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl text-emerald-400 text-xs font-bold animate-fade-in">
+            <span className="flex items-center gap-2"><Check size={16} /> Changes saved!</span>
+            <Link href={`/forms/${form.id}`} className="flex items-center gap-1 text-white/60 hover:text-white">
+              View survey <ExternalLink size={12} />
+            </Link>
+          </div>
+        )}
+
+        <div className="flex flex-col sm:flex-row gap-3">
           <button type="submit" disabled={saving || !isDirty}
-            className="flex items-center gap-2 bg-charcoal text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-charcoal-deep transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-            <Save size={15} />
-            {saving ? 'Saving…' : 'Save changes'}
+            className="flex-1 group bg-white text-[#1e1a1d] py-5 rounded-[2.5rem] text-xs font-black uppercase tracking-[0.15em] hover:bg-white/90 active:scale-[0.99] transition-all shadow-2xl flex items-center justify-center gap-2 disabled:opacity-30 disabled:cursor-not-allowed">
+            {saving ? <><Loader2 size={15} className="animate-spin" /> Saving…</> : <><Save size={15} /> Save changes</>}
           </button>
-          {saved && <span className="text-sm text-emerald-600 font-medium">✓ Saved!</span>}
-          <Link href="/profile" className="ml-auto text-sm text-slate-400 hover:text-slate-600 transition-colors">
+          <Link href={`/forms/${form.id}`}
+            className="sm:w-40 py-5 rounded-[2.5rem] text-xs font-black uppercase tracking-[0.15em] text-white/50 border border-white/10 hover:text-white hover:border-white/25 transition-all flex items-center justify-center">
             Cancel
           </Link>
         </div>
