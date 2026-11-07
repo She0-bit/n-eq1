@@ -14,7 +14,7 @@ export type Profile = {
 
 export type SampleCriteria = {
   roles: string[]
-  sex: string        // 'any' | 'male' | 'female'
+  sex: string
   min_age: number | null
   max_age: number | null
   countries: string[]
@@ -35,6 +35,12 @@ export type Form = {
   sample_criteria: SampleCriteria
   created_at: string
 }
+export const COUNTRIES = [
+  'Saudi Arabia','Egypt','UAE','Kuwait','Bahrain','Oman','Qatar','Jordan','Lebanon',
+  'Iraq','Syria','Libya','Tunisia','Algeria','Morocco','Sudan','Yemen','Palestine',
+  'United States','United Kingdom','Canada','Australia','Germany','France',
+  'Turkey','Pakistan','India','Malaysia'
+];
 
 export type FormFeedItem = {
   id: string
@@ -61,7 +67,6 @@ export type Fill = {
   filled_at: string
 }
 
-// ── Specialties (grouped for display, flat for storage) ───────
 export const SPECIALTY_GROUPS: Record<string, string[]> = {
   'Medicine & Health': [
     'General Medicine', 'Surgery', 'Internal Medicine', 'Pediatrics',
@@ -96,7 +101,6 @@ export const SPECIALTY_GROUPS: Record<string, string[]> = {
 
 export const SPECIALTIES = Object.values(SPECIALTY_GROUPS).flat()
 
-// ── Target population roles ───────────────────────────────────
 export const ROLE_GROUPS: Record<string, { value: string; label: string }[]> = {
   'Students': [
     { value: 'high_school',        label: 'High School Student' },
@@ -149,34 +153,28 @@ export const ROLE_GROUPS: Record<string, { value: string; label: string }[]> = {
   ],
 }
 
-// Flat list kept for backward-compat (roleLabel, profile select)
 export const ROLES = Object.values(ROLE_GROUPS).flat()
 
 export function roleLabel(value: string) {
   return ROLES.find(r => r.value === value)?.label ?? value
 }
 
-/** Returns true if a user profile matches a form's sample criteria */
 export function matchesCriteria(criteria: SampleCriteria | null | undefined, profile: Partial<Profile>): boolean {
   if (!criteria) return true
 
-  // Role
   if (criteria.roles?.length > 0 && profile.role) {
     if (!criteria.roles.includes(profile.role)) return false
   }
 
-  // Sex
   if (criteria.sex && criteria.sex !== 'any' && profile.sex && profile.sex !== '') {
     if (criteria.sex !== profile.sex) return false
   }
 
-  // Age
   if (profile.age) {
     if (criteria.min_age != null && profile.age < criteria.min_age) return false
     if (criteria.max_age != null && profile.age > criteria.max_age) return false
   }
 
-  // Country
   if (criteria.countries?.length > 0 && profile.country) {
     const userCountry = profile.country.toLowerCase()
     if (!criteria.countries.some(c => c.toLowerCase() === userCountry)) return false
