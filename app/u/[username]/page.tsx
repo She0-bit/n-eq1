@@ -19,7 +19,7 @@ export default async function PublicProfilePage({ params }: { params: Promise<{ 
   const { data: { user } } = await supabase.auth.getUser()
 
   const { data: profile } = await supabase
-    .from('profiles')
+    .from('public_profiles')
     .select('id, name, username, institution, specialty, points, show_in_leaderboard')
     .eq('username', username)
     .maybeSingle()
@@ -27,7 +27,18 @@ export default async function PublicProfilePage({ params }: { params: Promise<{ 
   if (!profile) notFound()
 
   const isOwner = user?.id === profile.id
-  const canShowPoints = isOwner || profile.show_in_leaderboard !== false
+
+  let points: number | null = profile.points
+  if (isOwner) {
+    const { data: me } = await supabase
+      .from('profiles')
+      .select('points')
+      .eq('id', profile.id)
+      .maybeSingle()
+    points = me?.points ?? 0
+  }
+
+  const canShowPoints = isOwner || points !== null
 
   const [{ data: forms }, { data: followerRows }, { data: followingRows }, { data: isFollowingRow }] =
     await Promise.all([
@@ -103,7 +114,7 @@ export default async function PublicProfilePage({ params }: { params: Promise<{ 
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
-              { label: 'Points', value: profile.points ?? 0, isPoints: true },
+              { label: 'Points', value: points ?? 0, isPoints: true },
               { label: 'Followers', value: followerCount },
               { label: 'Following', value: followingCount },
               { label: 'Responses', value: totalResponses },
