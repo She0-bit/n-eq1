@@ -25,27 +25,24 @@ export default async function UsersPage({
 
   let results: any[] = []
   let activeResearchers: any[] = []
-  const nowIso = new Date().toISOString()
   const clean = q ? cleanSearch(q) : ''
 
   if (q && clean.length >= 1) {
     const { data } = await supabase
-      .from('profiles')
+      .from('public_profiles')
       .select('id, username, name, institution, specialty')
       .not('username', 'is', null)
-      .eq('is_admin', false)
-      .or(`banned_until.is.null,banned_until.lt.${nowIso}`)
+      .eq('is_listed', true)
       .or(`username.ilike."*${clean}*",name.ilike."*${clean}*"`)
       .order('name', { ascending: true })
       .limit(30)
     results = data ?? []
   } else if (!q) {
     const { data } = await supabase
-      .from('profiles')
+      .from('public_profiles')
       .select('id, username, name, institution, specialty')
       .not('username', 'is', null)
-      .eq('is_admin', false)
-      .or(`banned_until.is.null,banned_until.lt.${nowIso}`)
+      .eq('is_listed', true)
       .gt('points', 0)
       .order('name', { ascending: true })
       .limit(10)
