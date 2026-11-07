@@ -53,7 +53,6 @@ function AuthForm() {
   const searchParams = useSearchParams()
   const supabase = createClient()
 
-  // password validation checks
   const validations = {
     minLength: signupPassword.length >= 6,
     hasUpper: /[A-Z]/.test(signupPassword),
@@ -62,7 +61,6 @@ function AuthForm() {
   }
   const isPasswordValid = Object.values(validations).every(Boolean)
 
-  // username validation checks
   const usernameChecks = {
     length: signupUsername.length >= USERNAME_MIN && signupUsername.length <= USERNAME_MAX,
     startsWithLetter: /^[a-z]/.test(signupUsername),
@@ -115,7 +113,7 @@ function AuthForm() {
 
     usernameTimer.current = setTimeout(async () => {
       try {
-        const { data } = await supabase.from('profiles').select('id').eq('username', signupUsername.toLowerCase()).maybeSingle()
+        const { data } = await supabase.from('public_profiles').select('id').eq('username', signupUsername.toLowerCase()).maybeSingle()
         setUsernameStatus(data ? 'taken' : 'available')
       } catch (err) {
         console.error("Network error during username check")
