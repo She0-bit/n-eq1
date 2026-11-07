@@ -274,6 +274,3 @@ function RequirementRow({ label, isValid }: { label: string; isValid: boolean })
     </div>
   )
 }
-    </div>
-  )
-}
