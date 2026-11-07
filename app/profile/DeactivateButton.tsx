@@ -13,16 +13,26 @@ export default function DeactivateButton({ formId, isActive }: { formId: string;
   async function toggle() {
     setLoading(true)
     setError('')
-    const { error: updateError } = await supabase
+    const { data, error: updateError } = await supabase
       .from('forms')
       .update({ is_active: !isActive })
       .eq('id', formId)
+      .select('is_active')
+    setLoading(false)
+
     if (updateError) {
       setError(updateError.message)
-    } else {
-      router.refresh()
+      return
     }
-    setLoading(false)
+    if (!data || data.length === 0) {
+      setError('You can only change your own surveys.')
+      return
+    }
+    if (data[0].is_active === isActive) {
+      setError('This survey is under review and can’t be reactivated yet.')
+      return
+    }
+    router.refresh()
   }
 
   return (
