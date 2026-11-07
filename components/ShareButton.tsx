@@ -12,17 +12,29 @@ export default function ShareButton({ formId }: { formId: string }) {
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUserId(data.user?.id ?? null))
-  }, [])
+  }, [supabase])
 
   function getShareUrl() {
     const base = window.location.origin
-    return userId
-      ? `${base}/forms/${formId}?ref=${userId}`
-      : `${base}/forms/${formId}`
+    const path = `/forms/${encodeURIComponent(formId)}`
+    return userId ? `${base}${path}?ref=${encodeURIComponent(userId)}` : `${base}${path}`
   }
 
   async function copy() {
-    await navigator.clipboard.writeText(getShareUrl())
+    const url = getShareUrl()
+    try {
+      await navigator.clipboard.writeText(url)
+    } catch {
+      const el = document.createElement('textarea')
+      el.value = url
+      el.setAttribute('readonly', '')
+      el.style.position = 'fixed'
+      el.style.opacity = '0'
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand('copy')
+      document.body.removeChild(el)
+    }
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -30,21 +42,22 @@ export default function ShareButton({ formId }: { formId: string }) {
   return (
     <div>
       <button
+        type="button"
         onClick={() => setExpanded(e => !e)}
-        className="flex items-center gap-2 text-sm text-slate-500 border border-ivory-border px-4 py-2 rounded-xl hover:bg-ivory transition-colors w-full justify-center"
+        className="flex items-center gap-2 text-xs font-bold text-slate-500 border border-slate-200 px-4 py-3 rounded-2xl hover:bg-slate-50 hover:text-[#1e1a1d] transition-colors w-full justify-center"
       >
-        <Share2 size={15} />
+        <Share2 size={14} />
         Share this survey
       </button>
 
       {expanded && (
-        <div className="mt-3 bg-ivory border border-ivory-border rounded-xl p-4 space-y-3">
+        <div className="mt-3 bg-slate-50 border border-slate-100 rounded-2xl p-4 space-y-3 animate-fade-in">
           <div>
-            <p className="text-sm font-medium text-slate-700 mb-0.5">Your referral link</p>
-            <p className="text-xs text-slate-500">
+            <p className="text-sm font-bold text-slate-700 mb-0.5">Your referral link</p>
+            <p className="text-xs text-slate-500 leading-relaxed">
               {userId
-                ? 'When someone opens this link and fills the survey on n=1, you automatically earn 5 pts — even though it\'s less than filling yourself, it\'s a great way to reach people who match the criteria.'
-                : 'Sign in to get a personal referral link that earns you points when shared recipients fill the survey.'}
+                ? 'When someone opens this link and fills the survey on n=1, you earn 5 pts. It’s a great way to reach people who match the criteria.'
+                : 'Sign in to get a personal referral link that earns you points when people fill the survey through it.'}
             </p>
           </div>
 
@@ -54,28 +67,30 @@ export default function ShareButton({ formId }: { formId: string }) {
                 <input
                   readOnly
                   value={getShareUrl()}
-                  className="flex-1 text-xs bg-white border border-ivory-border rounded-lg px-3 py-2 text-slate-600 focus:outline-none"
+                  onFocus={e => e.currentTarget.select()}
+                  className="flex-1 min-w-0 text-xs bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-slate-600 focus:outline-none"
                 />
                 <button
+                  type="button"
                   onClick={copy}
-                  className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border transition-colors shrink-0 ${
+                  className={`flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-xl border transition-colors shrink-0 ${
                     copied
-                      ? 'bg-emerald-600 text-white border-emerald-600'
-                      : 'bg-white text-slate-600 border-ivory-border hover:bg-ivory'
+                      ? 'bg-emerald-500 text-white border-emerald-500'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
                   {copied ? <><Check size={13} /> Copied!</> : <><Copy size={13} /> Copy</>}
                 </button>
               </div>
 
-              <div className="flex items-center gap-3 text-xs">
-                <div className="bg-white border border-ivory-border rounded-lg px-3 py-2 flex-1 text-center">
-                  <p className="font-semibold text-emerald-600">+5 pts</p>
-                  <p className="text-slate-400">per person who fills via your link</p>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-white border border-slate-100 rounded-xl px-3 py-2.5 text-center">
+                  <p className="font-black text-emerald-600">+5 pts</p>
+                  <p className="text-slate-400 mt-0.5">per person who fills via your link</p>
                 </div>
-                <div className="bg-white border border-ivory-border rounded-lg px-3 py-2 flex-1 text-center">
-                  <p className="font-semibold text-charcoal">Unlimited</p>
-                  <p className="text-slate-400">share with as many as you want</p>
+                <div className="bg-white border border-slate-100 rounded-xl px-3 py-2.5 text-center">
+                  <p className="font-black text-[#1e1a1d]">Once each</p>
+                  <p className="text-slate-400 mt-0.5">every person counts one time per survey</p>
                 </div>
               </div>
             </>
