@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
-import { ExternalLink, CheckCircle, Loader2, AlertCircle } from 'lucide-react'
+import { ExternalLink, CheckCircle, Loader2, AlertCircle, Timer, LogIn, RotateCw } from 'lucide-react'
 
 type Props = {
   formId:           string
@@ -14,160 +15,227 @@ type Props = {
   isOwner:          boolean
   alreadyFilled:    boolean
   referrerId:       string | null
+  minSeconds:       number
+  sessionRemaining: number | null
 }
 
-type Phase = 'idle' | 'open' | 'claiming' | 'done' | 'toosoon'
+type Phase = 'idle' | 'starting' | 'waiting' | 'ready' | 'claiming' | 'done'
 
-// Minimum time (seconds) before we accept a completion
-const MIN_SECONDS = 60
+function safeHttpUrl(url: string): string | null {
+  try {
+    const u = new URL(url)
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.toString() : null
+  } catch {
+    return null
+  }
+}
+
+function formatTime(s: number) {
+  const m = Math.floor(s / 60)
+  const sec = s % 60
+  return `${m}:${sec.toString().padStart(2, '0')}`
+}
 
 export default function FillButton({
-  formId, formLink, estimatedMinutes, pointsReward,
+  formId, formLink, pointsReward,
   isLoggedIn, isOwner, alreadyFilled, referrerId,
+  minSeconds, sessionRemaining,
 }: Props) {
-  const [phase, setPhase]   = useState<Phase>(alreadyFilled ? 'done' : 'idle')
-  const [error, setError]   = useState('')
-  const startTimeRef        = useRef<number | null>(null)
-  const STORAGE_KEY         = `fill_start_${formId}`
-  const router              = useRouter()
-  const supabase            = createClient()
+  const initialPhase: Phase =
+    alreadyFilled ? 'done' :
+    sessionRemaining == null ? 'idle' :
+    sessionRemaining > 0 ? 'waiting' : 'ready'
 
-  // On mount: restore startTime from localStorage if user already opened the survey
+  const [phase, setPhase]         = useState<Phase>(initialPhase)
+  const [remaining, setRemaining] = useState<number>(sessionRemaining ?? minSeconds)
+  const [error, setError]         = useState('')
+  const [earned, setEarned]       = useState(pointsReward)
+  const deadlineRef = useRef<number | null>(
+    sessionRemaining != null ? Date.now() + sessionRemaining * 1000 : null
+  )
+
+  const router   = useRouter()
+  const supabase = createClient()
+
   useEffect(() => {
-    if (alreadyFilled) return
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw) {
-        startTimeRef.current = parseInt(raw, 10)
-        setPhase('open')
-      }
-    } catch { /* ignore */ }
-  }, [])
+    if (phase !== 'waiting') return
+    const tick = () => {
+      if (!deadlineRef.current) return
+      const left = Math.max(0, Math.ceil((deadlineRef.current - Date.now()) / 1000))
+      setRemaining(left)
+      if (left === 0) setPhase('ready')
+    }
+    tick()
+    const t = setInterval(tick, 1000)
+    return () => clearInterval(t)
+  }, [phase])
 
-  function openForm() {
-    const now = Date.now()
-    startTimeRef.current = now
-    try { localStorage.setItem(STORAGE_KEY, String(now)) } catch { /* ignore */ }
-    window.open(formLink, '_blank', 'noopener,noreferrer')
-    setPhase('open')
+  function startCountdown(seconds: number) {
+    deadlineRef.current = Date.now() + seconds * 1000
+    setRemaining(seconds)
+    setPhase(seconds > 0 ? 'waiting' : 'ready')
   }
 
-  async function handleFinished() {
-    const elapsed = startTimeRef.current
-      ? Math.floor((Date.now() - startTimeRef.current) / 1000)
-      : 0
-
-    if (elapsed < MIN_SECONDS) {
-      setPhase('toosoon')
+  async function openForm() {
+    setError('')
+    const url = safeHttpUrl(formLink)
+    if (!url) {
+      setError('This survey link is invalid. Please report it.')
       return
     }
+    window.open(url, '_blank', 'noopener,noreferrer')
 
+    if (phase !== 'idle') return
+
+    setPhase('starting')
+    const { data, error: rpcError } = await supabase.rpc('start_fill', { form_id_input: formId })
+    if (rpcError) {
+      setError(rpcError.message)
+      setPhase('idle')
+      return
+    }
+    startCountdown(Number((data as any)?.remaining_seconds ?? minSeconds))
+  }
+
+  async function claim() {
     setPhase('claiming')
     setError('')
-    try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
 
-    const { error: rpcError } = await supabase.rpc('fill_form', {
+    const { data, error: rpcError } = await supabase.rpc('fill_form', {
       form_id_input:     formId,
       referrer_id_input: referrerId ?? null,
     })
-    if (rpcError) { setError(rpcError.message); setPhase('open'); return }
+
+    if (rpcError) {
+      const tooSoon = rpcError.message.match(/TOO_SOON:(\d+)/)
+      if (tooSoon) {
+        startCountdown(parseInt(tooSoon[1], 10))
+        return
+      }
+      if (rpcError.message.includes('OPEN_FIRST')) {
+        setError('Please open the survey first.')
+        setPhase('idle')
+        return
+      }
+      if (rpcError.message.includes('Already filled')) {
+        setPhase('done')
+        router.refresh()
+        return
+      }
+      setError(rpcError.message)
+      setPhase('ready')
+      return
+    }
+
+    const pts = Number((data as any)?.points_earned)
+    if (pts) setEarned(pts)
     setPhase('done')
     router.refresh()
   }
 
-  // ── Not logged in ────────────────────────────────────────────
   if (!isLoggedIn) {
     return (
-      <a href="/auth"
-        className="block w-full text-center bg-charcoal text-white py-3 rounded-xl font-medium text-sm hover:bg-charcoal-deep transition-colors">
-        Sign in to fill this survey & earn {pointsReward} pts
-      </a>
+      <Link href="/auth"
+        className="w-full flex items-center justify-center gap-2 bg-[#1e1a1d] text-white py-4 rounded-2xl text-xs font-bold hover:bg-black transition-colors shadow-lg">
+        <LogIn size={15} /> Sign in to fill & earn +{pointsReward} pts
+      </Link>
     )
   }
 
-  // ── Owner ────────────────────────────────────────────────────
   if (isOwner) {
     return (
-      <div className="bg-ivory border border-ivory-border rounded-xl p-4 text-center text-sm text-slate-500">
-        This is your survey — share it to get more responses!
+      <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 text-center text-xs font-medium text-slate-500">
+        This is your survey. Share it to get more responses!
       </div>
     )
   }
 
-  // ── Already done ─────────────────────────────────────────────
   if (phase === 'done') {
     return (
-      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5 text-center">
+      <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-5 text-center">
         <CheckCircle className="text-emerald-500 mx-auto mb-2" size={28} />
-        <p className="font-semibold text-emerald-700">You filled this survey!</p>
-        <p className="text-sm text-emerald-600 mt-0.5">+{pointsReward} points added to your account</p>
+        <p className="font-bold text-emerald-700 text-sm">You filled this survey!</p>
+        <p className="text-xs text-emerald-600 mt-0.5 font-medium">+{earned} points added to your account</p>
       </div>
     )
   }
 
-  // ── Idle ─────────────────────────────────────────────────────
-  if (phase === 'idle') {
+  if (phase === 'idle' || phase === 'starting') {
     return (
-      <button onClick={openForm}
-        className="w-full flex items-center justify-center gap-2 bg-charcoal text-white py-3 rounded-xl font-medium text-sm hover:bg-charcoal-deep transition-colors">
-        <ExternalLink size={16} />
-        Open & fill this survey (earn +{pointsReward} pts)
-      </button>
-    )
-  }
-
-  // ── Too soon ─────────────────────────────────────────────────
-  if (phase === 'toosoon') {
-    return (
-      <div className="space-y-3">
-        <div className="bg-red-50 border border-red-200 rounded-xl p-5 text-center">
-          <AlertCircle className="text-red-400 mx-auto mb-2" size={26} />
-          <p className="font-semibold text-red-700">That was too fast</p>
-          <p className="text-sm text-red-600 mt-1">
-            You need at least 1 minute to fill this survey.<br />
-            Please go back and actually complete it.
-          </p>
-        </div>
-        <button onClick={() => { window.open(formLink, '_blank', 'noopener,noreferrer'); setPhase('open') }}
-          className="w-full flex items-center justify-center gap-2 bg-charcoal text-white py-3 rounded-xl font-medium text-sm hover:bg-charcoal-deep transition-colors">
-          <ExternalLink size={16} /> Open survey again
+      <div className="space-y-2">
+        {error && <ErrorBox msg={error} />}
+        <button onClick={openForm} disabled={phase === 'starting'}
+          className="w-full flex items-center justify-center gap-2 bg-[#1e1a1d] text-white py-4 rounded-2xl text-xs font-bold hover:bg-black active:scale-[0.99] transition-all shadow-lg disabled:opacity-60">
+          {phase === 'starting'
+            ? <><Loader2 size={15} className="animate-spin" /> Opening…</>
+            : <><ExternalLink size={15} /> Open & fill this survey · +{pointsReward} pts</>}
         </button>
       </div>
     )
   }
 
-  // ── Survey is open / claiming ────────────────────────────────
+  const progress = Math.min(1, Math.max(0, 1 - remaining / minSeconds))
+
   return (
     <div className="space-y-3">
-      {error && (
-        <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-4 py-3">{error}</div>
-      )}
+      {error && <ErrorBox msg={error} />}
 
-      <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 text-center">
-        <p className="text-sm font-medium text-amber-800">Survey opened in a new tab</p>
-        <p className="text-xs text-amber-600 mt-1">
-          Complete it, then come back here and click the button below.
-        </p>
+      <div className="rounded-2xl bg-[#1e1a1d] p-5 text-white space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
+            <Timer size={16} className={phase === 'waiting' ? 'text-amber-300' : 'text-emerald-400'} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-bold">Survey opened in a new tab</p>
+            <p className="text-xs text-white/40 mt-0.5 leading-relaxed">
+              Complete it, then come back here to claim your points.
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-1000 ${phase === 'waiting' ? 'bg-amber-300' : 'bg-emerald-400'}`}
+              style={{ width: `${progress * 100}%` }}
+            />
+          </div>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-white/30 text-right tabular-nums">
+            {phase === 'waiting' ? `Claim unlocks in ${formatTime(remaining)}` : 'Ready to claim'}
+          </p>
+        </div>
       </div>
 
-      {phase === 'open' && (
-        <button onClick={handleFinished}
-          className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white py-3 rounded-xl font-medium text-sm hover:bg-emerald-700 transition-colors">
-          <CheckCircle size={16} />
-          I've finished filling it — claim +{pointsReward} pts
-        </button>
-      )}
+      <button
+        onClick={claim}
+        disabled={phase !== 'ready'}
+        className="w-full flex items-center justify-center gap-2 bg-emerald-500 text-white py-4 rounded-2xl text-xs font-bold hover:bg-emerald-600 active:scale-[0.99] transition-all shadow-lg shadow-emerald-500/20 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none disabled:cursor-not-allowed"
+      >
+        {phase === 'claiming' ? (
+          <><Loader2 size={15} className="animate-spin" /> Awarding points…</>
+        ) : phase === 'waiting' ? (
+          <><Timer size={15} /> Available in {formatTime(remaining)}</>
+        ) : (
+          <><CheckCircle size={15} /> I've finished · claim +{pointsReward} pts</>
+        )}
+      </button>
 
-      {phase === 'claiming' && (
-        <button disabled
-          className="w-full flex items-center justify-center gap-2 bg-emerald-600/70 text-white py-3 rounded-xl font-medium text-sm cursor-not-allowed">
-          <Loader2 size={16} className="animate-spin" /> Awarding points…
-        </button>
-      )}
+      <button onClick={openForm}
+        className="w-full flex items-center justify-center gap-1.5 text-[11px] font-bold text-slate-400 hover:text-[#1e1a1d] transition-colors">
+        <RotateCw size={11} /> Reopen survey
+      </button>
 
-      <p className="text-xs text-slate-400 text-center">
-        Claiming without filling the survey will result in no points being awarded.
+      <p className="text-[10px] text-slate-400 text-center font-medium">
+        Claiming without actually filling the survey may get your account flagged.
       </p>
+    </div>
+  )
+}
+
+function ErrorBox({ msg }: { msg: string }) {
+  return (
+    <div className="flex items-center gap-2 text-xs font-bold text-rose-500 bg-rose-50 border border-rose-100 rounded-2xl px-4 py-3">
+      <AlertCircle size={14} className="shrink-0" /> {msg}
     </div>
   )
 }
