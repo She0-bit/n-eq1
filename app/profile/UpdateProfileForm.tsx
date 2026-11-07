@@ -133,7 +133,7 @@ export default function UpdateProfileForm({ profile }: { profile: Profile }) {
     usernameTimer.current = setTimeout(async () => {
       try {
         const { data } = await supabase
-          .from('profiles').select('id')
+          .from('public_profiles').select('id')
           .eq('username', username)
           .neq('id', profile.id)
           .maybeSingle()
